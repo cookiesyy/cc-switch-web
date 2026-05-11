@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { dirname, extname, join, normalize, basename, relative } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import YAML from "yaml";
 import { createHash } from "node:crypto";
 
@@ -11,6 +12,7 @@ const HOST = process.env.CC_SWITCH_WEB_HOST || "0.0.0.0";
 const PORT = Number(process.env.CC_SWITCH_WEB_PORT || 15730);
 const DATA_DIR = process.env.CC_SWITCH_WEB_DATA_DIR || join(homedir(), ".cc-switch-web");
 const STATE_PATH = join(DATA_DIR, "state.json");
+const DB_PATH = join(DATA_DIR, "cc-switch-web.db");
 const STATIC_DIR = process.env.CC_SWITCH_WEB_STATIC_DIR || "";
 const AUTH_TOKEN = process.env.CC_SWITCH_WEB_AUTH_TOKEN || "";
 
@@ -77,8 +79,76 @@ async function backupExistingFile(path) {
   await copyFile(path, backupPath);
 }
 
+let db;
+
+function getDb() {
+  if (db) return db;
+  db = new DatabaseSync(DB_PATH);
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE IF NOT EXISTS state_sections (
+      section TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+  return db;
+}
+
+function countSections() {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) AS count FROM state_sections")
+    .get();
+  return Number(row?.count || 0);
+}
+
+function writeSectionsSync(state) {
+  const database = getDb();
+  const stmt = database.prepare(`
+    INSERT INTO state_sections(section, value)
+    VALUES(?, ?)
+    ON CONFLICT(section) DO UPDATE SET value = excluded.value
+  `);
+  database.exec("BEGIN");
+  try {
+    for (const [section, value] of Object.entries(state)) {
+      stmt.run(section, JSON.stringify(value ?? null));
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function readSectionsSync() {
+  const rows = getDb()
+    .prepare("SELECT section, value FROM state_sections")
+    .all();
+  return Object.fromEntries(
+    rows.map((row) => [row.section, JSON.parse(row.value)]),
+  );
+}
+
+async function migrateStateJsonToDbIfNeeded() {
+  if (countSections() > 0) return;
+  const legacyState = await readJson(STATE_PATH, null);
+  if (!legacyState) return;
+  writeSectionsSync({
+    settings: legacyState.settings ?? defaultState().settings,
+    providers: legacyState.providers ?? defaultState().providers,
+    current: legacyState.current ?? defaultState().current,
+    mcp: legacyState.mcp ?? defaultState().mcp,
+    skills: legacyState.skills ?? defaultState().skills,
+    skillRepos: legacyState.skillRepos ?? defaultState().skillRepos,
+    prompts: legacyState.prompts ?? defaultState().prompts,
+    skillBackups: legacyState.skillBackups ?? defaultState().skillBackups,
+    omoCurrent: legacyState.omoCurrent ?? defaultState().omoCurrent,
+  });
+}
+
 async function loadState() {
-  const state = await readJson(STATE_PATH, defaultState());
+  await migrateStateJsonToDbIfNeeded();
+  const state = countSections() > 0 ? readSectionsSync() : defaultState();
   return {
     ...defaultState(),
     ...state,
@@ -94,7 +164,17 @@ async function loadState() {
 }
 
 async function saveState(state) {
-  await writeJsonAtomic(STATE_PATH, state);
+  writeSectionsSync({
+    settings: state.settings,
+    providers: state.providers,
+    current: state.current,
+    mcp: state.mcp,
+    skills: state.skills,
+    skillRepos: state.skillRepos,
+    prompts: state.prompts,
+    skillBackups: state.skillBackups,
+    omoCurrent: state.omoCurrent,
+  });
 }
 
 function sendJson(res, status, body) {
