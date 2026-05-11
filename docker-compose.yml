@@ -1,0 +1,20 @@
+services:
+  cc-switch-web:
+    build: .
+    image: cc-switch-web:latest
+    container_name: cc-switch-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      CC_SWITCH_WEB_HOST: 0.0.0.0
+      CC_SWITCH_WEB_PORT: 3000
+      CC_SWITCH_WEB_DATA_DIR: /data
+      CC_SWITCH_WEB_STATIC_DIR: /app/dist
+    volumes:
+      - cc-switch-web-data:/data
+      - ${HOME}/.codex:/root/.codex
+      - ${HOME}/.claude:/root/.claude
+
+volumes:
+  cc-switch-web-data:

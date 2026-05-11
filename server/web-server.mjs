@@ -1,13 +1,14 @@
 import { createServer } from "node:http";
-import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, extname, join, normalize } from "node:path";
 import { homedir } from "node:os";
 
 const HOST = process.env.CC_SWITCH_WEB_HOST || "127.0.0.1";
 const PORT = Number(process.env.CC_SWITCH_WEB_PORT || 15730);
 const DATA_DIR = process.env.CC_SWITCH_WEB_DATA_DIR || join(homedir(), ".cc-switch-web");
 const STATE_PATH = join(DATA_DIR, "state.json");
+const STATIC_DIR = process.env.CC_SWITCH_WEB_STATIC_DIR || "";
 
 const APPS = ["claude", "claude-desktop", "codex", "gemini", "opencode", "openclaw", "hermes"];
 
@@ -80,6 +81,58 @@ function sendJson(res, status, body) {
     "Content-Length": Buffer.byteLength(text),
   });
   res.end(text);
+}
+
+function contentType(path) {
+  switch (extname(path)) {
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".js":
+      return "text/javascript; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".ico":
+      return "image/x-icon";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+async function sendStatic(req, res) {
+  if (!STATIC_DIR || (req.method !== "GET" && req.method !== "HEAD")) return false;
+
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const decodedPath = decodeURIComponent(url.pathname);
+  const relative = normalize(decodedPath).replace(/^(\.\.[/\\])+/, "").replace(/^[/\\]/, "");
+  let filePath = join(STATIC_DIR, relative || "index.html");
+
+  try {
+    const info = await stat(filePath);
+    if (info.isDirectory()) filePath = join(filePath, "index.html");
+  } catch {
+    filePath = join(STATIC_DIR, "index.html");
+  }
+
+  const body = await readFile(filePath);
+  res.writeHead(200, {
+    "Content-Type": contentType(filePath),
+    "Content-Length": body.length,
+  });
+  if (req.method === "HEAD") {
+    res.end();
+    return true;
+  }
+  res.end(body);
+  return true;
 }
 
 function readBody(req) {
@@ -229,6 +282,8 @@ async function route(req, res) {
       return sendJson(res, 200, { warnings: [] });
     }
   }
+
+  if (await sendStatic(req, res)) return;
 
   sendJson(res, 404, { error: "Not found" });
 }

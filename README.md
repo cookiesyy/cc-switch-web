@@ -82,6 +82,58 @@ corepack pnpm server
 
 For production, put Nginx or Caddy in front of both the static files and `/api`.
 
+## Docker
+
+Build and run with Docker:
+
+```bash
+docker build -t cc-switch-web .
+docker run -d \
+  --name cc-switch-web \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v cc-switch-web-data:/data \
+  -v "$HOME/.codex:/root/.codex" \
+  -v "$HOME/.claude:/root/.claude" \
+  cc-switch-web
+```
+
+Open:
+
+```text
+http://SERVER_IP:3000
+```
+
+Or use Docker Compose:
+
+```bash
+docker compose up -d --build
+```
+
+The container serves both the Web UI and `/api` from one Node.js process.
+
+Default container environment:
+
+```bash
+CC_SWITCH_WEB_HOST=0.0.0.0
+CC_SWITCH_WEB_PORT=3000
+CC_SWITCH_WEB_DATA_DIR=/data
+CC_SWITCH_WEB_STATIC_DIR=/app/dist
+```
+
+Important volumes:
+
+- `/data`: Web backend state file.
+- `/root/.codex`: mounted host Codex config directory.
+- `/root/.claude`: mounted host Claude config directory.
+
+If your CLI tools run under a non-root Linux user, mount that user's config directories instead:
+
+```bash
+-v /home/YOUR_USER/.codex:/root/.codex
+-v /home/YOUR_USER/.claude:/root/.claude
+```
+
 ## Environment Variables
 
 ```bash
@@ -145,6 +197,8 @@ Recommended deployment:
 - Restrict permissions for `~/.cc-switch-web` and CLI config files.
 
 The backend can write API keys into live CLI config files. Treat it as a sensitive admin tool.
+
+If using Docker on a public server, put Nginx/Caddy with HTTPS and authentication in front of port `3000`.
 
 ## Backup Behavior
 
