@@ -110,6 +110,14 @@ Or use Docker Compose:
 docker compose up -d --build
 ```
 
+Production-style deployment with Nginx in front:
+
+```bash
+cp .env.example .env
+# edit CC_SWITCH_WEB_AUTH_TOKEN
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
 The container serves both the Web UI and `/api` from one Node.js process.
 
 Default container environment:
@@ -199,6 +207,18 @@ Recommended deployment:
 The backend can write API keys into live CLI config files. Treat it as a sensitive admin tool.
 
 If using Docker on a public server, put Nginx/Caddy with HTTPS and authentication in front of port `3000`.
+
+This project also supports a built-in Bearer token gate on the backend:
+
+```bash
+CC_SWITCH_WEB_AUTH_TOKEN=change-me
+```
+
+When set, every request must send:
+
+```http
+Authorization: Bearer change-me
+```
 
 ## Backup Behavior
 

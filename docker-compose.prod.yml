@@ -1,0 +1,32 @@
+services:
+  cc-switch-web:
+    build: .
+    image: cc-switch-web:latest
+    restart: unless-stopped
+    environment:
+      CC_SWITCH_WEB_HOST: 0.0.0.0
+      CC_SWITCH_WEB_PORT: 3000
+      CC_SWITCH_WEB_DATA_DIR: /data
+      CC_SWITCH_WEB_STATIC_DIR: /app/dist
+      CC_SWITCH_WEB_AUTH_TOKEN: ${CC_SWITCH_WEB_AUTH_TOKEN}
+    volumes:
+      - cc-switch-web-data:/data
+      - ${HOME}/.codex:/root/.codex
+      - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.gemini:/root/.gemini
+      - ${HOME}/.config/opencode:/root/.config/opencode
+      - ${HOME}/.openclaw:/root/.openclaw
+      - ${HOME}/.hermes:/root/.hermes
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - cc-switch-web
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  cc-switch-web-data:

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppId } from "./types";
+import { isTauriRuntime } from "./http";
 
 // ===== 流式健康检查类型 =====
 
@@ -37,6 +38,9 @@ export async function streamCheckProvider(
   appType: AppId,
   providerId: string,
 ): Promise<StreamCheckResult> {
+  if (!isTauriRuntime()) {
+    throw new Error("Stream check is not available in web mode");
+  }
   return invoke("stream_check_provider", { appType, providerId });
 }
 
@@ -47,6 +51,9 @@ export async function streamCheckAllProviders(
   appType: AppId,
   proxyTargetsOnly: boolean = false,
 ): Promise<Array<[string, StreamCheckResult]>> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
   return invoke("stream_check_all_providers", { appType, proxyTargetsOnly });
 }
 
@@ -54,6 +61,17 @@ export async function streamCheckAllProviders(
  * 获取流式检查配置
  */
 export async function getStreamCheckConfig(): Promise<StreamCheckConfig> {
+  if (!isTauriRuntime()) {
+    return {
+      timeoutSecs: 8,
+      maxRetries: 1,
+      degradedThresholdMs: 3000,
+      claudeModel: "",
+      codexModel: "",
+      geminiModel: "",
+      testPrompt: "ping",
+    };
+  }
   return invoke("get_stream_check_config");
 }
 
@@ -63,5 +81,6 @@ export async function getStreamCheckConfig(): Promise<StreamCheckConfig> {
 export async function saveStreamCheckConfig(
   config: StreamCheckConfig,
 ): Promise<void> {
+  if (!isTauriRuntime()) return;
   return invoke("save_stream_check_config", { config });
 }

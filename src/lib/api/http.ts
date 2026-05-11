@@ -5,10 +5,15 @@ export async function apiRequest<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  const token =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("cc-switch-web-auth-token")
+      : null;
   const response = await fetch(path, {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
   });

@@ -12,6 +12,7 @@ const PORT = Number(process.env.CC_SWITCH_WEB_PORT || 15730);
 const DATA_DIR = process.env.CC_SWITCH_WEB_DATA_DIR || join(homedir(), ".cc-switch-web");
 const STATE_PATH = join(DATA_DIR, "state.json");
 const STATIC_DIR = process.env.CC_SWITCH_WEB_STATIC_DIR || "";
+const AUTH_TOKEN = process.env.CC_SWITCH_WEB_AUTH_TOKEN || "";
 
 const APPS = ["claude", "claude-desktop", "codex", "gemini", "opencode", "openclaw", "hermes"];
 
@@ -106,6 +107,20 @@ function sendJson(res, status, body) {
     "Content-Length": Buffer.byteLength(text),
   });
   res.end(text);
+}
+
+function unauthorized(res) {
+  res.writeHead(401, {
+    "Content-Type": "application/json; charset=utf-8",
+    "WWW-Authenticate": 'Bearer realm="cc-switch-web"',
+  });
+  res.end(JSON.stringify({ error: "Unauthorized" }));
+}
+
+function isAuthorized(req) {
+  if (!AUTH_TOKEN) return true;
+  const header = req.headers.authorization || "";
+  return header === `Bearer ${AUTH_TOKEN}`;
 }
 
 function contentType(path) {
@@ -799,6 +814,9 @@ async function fetchModelsForConfig({
 }
 
 async function route(req, res) {
+  if (!isAuthorized(req)) {
+    return unauthorized(res);
+  }
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
 
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
