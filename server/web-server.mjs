@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, extname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize, basename } from "node:path";
 import { homedir } from "node:os";
 
 const HOST = process.env.CC_SWITCH_WEB_HOST || "0.0.0.0";
@@ -51,6 +51,13 @@ async function writeJsonAtomic(path, data) {
   await ensureDir(dirname(path));
   const tmp = `${path}.${process.pid}.tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+  await rename(tmp, path);
+}
+
+async function writeTextAtomic(path, text) {
+  await ensureDir(dirname(path));
+  const tmp = `${path}.${process.pid}.tmp`;
+  await writeFile(tmp, text, { mode: 0o600 });
   await rename(tmp, path);
 }
 
@@ -191,6 +198,22 @@ function claudeSettingsPath() {
   return join(homedir(), ".claude", "settings.json");
 }
 
+function geminiSettingsPath() {
+  return join(homedir(), ".gemini", "settings.json");
+}
+
+function opencodeConfigPath() {
+  return join(homedir(), ".config", "opencode", "opencode.json");
+}
+
+function openclawConfigPath() {
+  return join(homedir(), ".config", "openclaw", "openclaw.json");
+}
+
+function hermesConfigPath() {
+  return join(homedir(), ".hermes", "config.yaml");
+}
+
 async function applyProviderToLive(app, provider) {
   if (app === "codex") {
     const paths = codexPaths();
@@ -213,6 +236,45 @@ async function applyProviderToLive(app, provider) {
     if (settings && typeof settings === "object") {
       await backupExistingFile(claudeSettingsPath());
       await writeJsonAtomic(claudeSettingsPath(), settings);
+    }
+    return;
+  }
+
+  if (app === "gemini") {
+    const settings = provider.settingsConfig;
+    if (settings && typeof settings === "object") {
+      await backupExistingFile(geminiSettingsPath());
+      await writeJsonAtomic(geminiSettingsPath(), settings);
+    }
+    return;
+  }
+
+  if (app === "opencode") {
+    const settings = provider.settingsConfig;
+    if (settings && typeof settings === "object") {
+      await backupExistingFile(opencodeConfigPath());
+      await writeJsonAtomic(opencodeConfigPath(), settings);
+    }
+    return;
+  }
+
+  if (app === "openclaw") {
+    const settings = provider.settingsConfig;
+    if (settings && typeof settings === "object") {
+      await backupExistingFile(openclawConfigPath());
+      await writeJsonAtomic(openclawConfigPath(), settings);
+    }
+    return;
+  }
+
+  if (app === "hermes") {
+    const settings = provider.settingsConfig;
+    if (settings && typeof settings === "object") {
+      await backupExistingFile(hermesConfigPath());
+      await writeTextAtomic(
+        hermesConfigPath(),
+        `${JSON.stringify(settings, null, 2)}\n`,
+      );
     }
   }
 }
@@ -387,10 +449,15 @@ async function route(req, res) {
     }
 
     if (parts.length === 3 && req.method === "POST") {
-      const { provider } = await readBody(req);
+      const { provider, addToLive } = await readBody(req);
       if (!provider?.id) throw new Error("provider.id is required");
       state.providers[app][provider.id] = provider;
-      if (!state.current[app] && !["opencode", "openclaw", "hermes"].includes(app)) {
+      const shouldWriteLive = addToLive !== false;
+      if (["opencode", "openclaw", "hermes"].includes(app)) {
+        if (shouldWriteLive) {
+          await applyProviderToLive(app, provider);
+        }
+      } else if (!state.current[app]) {
         state.current[app] = provider.id;
         await applyProviderToLive(app, provider);
       }
@@ -542,6 +609,23 @@ async function route(req, res) {
       await saveState(state);
       return sendJson(res, 200, installedSkill);
     }
+    if (parts[2] === "install-zip" && req.method === "POST") {
+      const { fileName, currentApp } = await readBody(req);
+      const directory = String(fileName || "uploaded-skill").replace(/\.zip$/i, "");
+      const id = directory;
+      const installedSkill = {
+        id,
+        name: directory,
+        description: `Imported from ZIP: ${fileName}`,
+        directory,
+        apps: Object.fromEntries(APPS.map((app) => [app, app === currentApp])),
+        installedAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      state.skills[id] = installedSkill;
+      await saveState(state);
+      return sendJson(res, 200, [installedSkill]);
+    }
     if (parts[2] === "toggle-app" && req.method === "POST") {
       const { id, app, enabled } = await readBody(req);
       assertApp(app);
@@ -602,6 +686,44 @@ async function route(req, res) {
       state.skillRepos = (state.skillRepos || []).filter(
         (item) => !(item.owner === owner && item.name === name),
       );
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "prompts") {
+    const app = parts[2];
+    assertApp(app);
+
+    if (parts.length === 3 && req.method === "GET") {
+      return sendJson(res, 200, state.prompts[app] || {});
+    }
+
+    if (parts.length === 4 && parts[3] === "current-file-content" && req.method === "GET") {
+      const prompts = state.prompts[app] || {};
+      const enabled = Object.values(prompts).find((prompt) => prompt.enabled);
+      return sendJson(res, 200, enabled?.content || null);
+    }
+
+    const id = decodeURIComponent(parts[3] || "");
+    if (parts.length === 4 && req.method === "PUT") {
+      const { prompt } = await readBody(req);
+      if (!prompt?.id) throw new Error("prompt.id is required");
+      state.prompts[app][id] = prompt;
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+
+    if (parts.length === 4 && req.method === "DELETE") {
+      delete state.prompts[app][id];
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+
+    if (parts.length === 5 && parts[4] === "enable" && req.method === "POST") {
+      Object.keys(state.prompts[app] || {}).forEach((key) => {
+        state.prompts[app][key].enabled = key === id;
+      });
       await saveState(state);
       return sendJson(res, 200, true);
     }

@@ -354,6 +354,25 @@ export const skillsApi = {
     filePath: string,
     currentApp: AppId,
   ): Promise<InstalledSkill[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/install-zip", {
+        method: "POST",
+        body: JSON.stringify({ fileName: filePath, currentApp }),
+      });
+    }
     return await invoke("install_skills_from_zip", { filePath, currentApp });
+  },
+
+  async installFromZipFile(
+    file: File,
+    currentApp: AppId,
+  ): Promise<InstalledSkill[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/install-zip", {
+        method: "POST",
+        body: JSON.stringify({ fileName: file.name, currentApp }),
+      });
+    }
+    throw new Error("installFromZipFile is only implemented for web mode");
   },
 };

@@ -43,6 +43,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { isTauriRuntime } from "@/lib/api/http";
 
 interface UnifiedSkillsPanelProps {
   onOpenDiscovery: () => void;
@@ -197,13 +198,35 @@ const UnifiedSkillsPanel = React.forwardRef<
 
   const handleInstallFromZip = async () => {
     try {
-      const filePath = await skillsApi.openZipFileDialog();
-      if (!filePath) return;
-
-      const installed = await installFromZipMutation.mutateAsync({
-        filePath,
-        currentApp,
-      });
+      let installed;
+      if (!isTauriRuntime()) {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".zip,application/zip";
+        installed = await new Promise<any[]>((resolve, reject) => {
+          input.onchange = async () => {
+            try {
+              const file = input.files?.[0];
+              if (!file) return resolve([]);
+              const result = await skillsApi.installFromZipFile(
+                file,
+                currentApp,
+              );
+              resolve(result);
+            } catch (error) {
+              reject(error);
+            }
+          };
+          input.click();
+        });
+      } else {
+        const filePath = await skillsApi.openZipFileDialog();
+        if (!filePath) return;
+        installed = await installFromZipMutation.mutateAsync({
+          filePath,
+          currentApp,
+        });
+      }
 
       if (installed.length === 0) {
         toast.info(t("skills.installFromZip.noSkillsFound"), {
