@@ -122,6 +122,10 @@ export const providersApi = {
   },
 
   async importDefault(appId: AppId): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      console.warn(`importDefault is not implemented in web mode for ${appId}`);
+      return false;
+    }
     return await invoke("import_default_config", { app: appId });
   },
 
@@ -138,6 +142,9 @@ export const providersApi = {
   },
 
   async updateTrayMenu(): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return false;
+    }
     return await invoke("update_tray_menu");
   },
 

@@ -50,6 +50,9 @@ export const settingsApi = {
   },
 
   async getConfigDir(appId: AppId): Promise<string> {
+    if (!isTauriRuntime()) {
+      return await apiRequest(`/api/config-dir/${appId}`);
+    }
     return await invoke("get_config_dir", { app: appId });
   },
 

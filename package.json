@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "pnpm tauri dev",
     "dev:web": "vite",
-    "server": "cargo run --manifest-path src-tauri/Cargo.toml --bin cc-switch-server",
+    "server": "node server/web-server.mjs",
+    "server:rust": "cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin cc-switch-server",
     "build": "pnpm tauri build",
     "build:web": "vite build",
     "tauri": "tauri",
