@@ -6,6 +6,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { isTauriRuntime } from "./http";
 
 /**
  * GitHub 设备码响应
@@ -58,6 +59,7 @@ export interface CopilotAuthStatus {
  * @returns 设备码响应，包含用户码和验证 URL
  */
 export async function copilotStartDeviceFlow(): Promise<CopilotDeviceCodeResponse> {
+  if (!isTauriRuntime()) throw new Error("Copilot auth is not available in web mode");
   return invoke<CopilotDeviceCodeResponse>("copilot_start_device_flow");
 }
 
@@ -70,6 +72,7 @@ export async function copilotStartDeviceFlow(): Promise<CopilotDeviceCodeRespons
  * @returns true 表示认证成功，false 表示仍在等待用户授权
  */
 export async function copilotPollForAuth(deviceCode: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
   return invoke<boolean>("copilot_poll_for_auth", {
     deviceCode,
   });
@@ -81,6 +84,16 @@ export async function copilotPollForAuth(deviceCode: string): Promise<boolean> {
  * @returns 认证状态，包含是否已认证、用户名和过期时间
  */
 export async function copilotGetAuthStatus(): Promise<CopilotAuthStatus> {
+  if (!isTauriRuntime()) {
+    return {
+      authenticated: false,
+      default_account_id: null,
+      migration_error: null,
+      username: null,
+      expires_at: null,
+      accounts: [],
+    };
+  }
   return invoke<CopilotAuthStatus>("copilot_get_auth_status");
 }
 
@@ -88,6 +101,7 @@ export async function copilotGetAuthStatus(): Promise<CopilotAuthStatus> {
  * 注销 Copilot 认证
  */
 export async function copilotLogout(): Promise<void> {
+  if (!isTauriRuntime()) return;
   return invoke("copilot_logout");
 }
 
@@ -97,6 +111,7 @@ export async function copilotLogout(): Promise<void> {
  * @returns true 表示已认证
  */
 export async function copilotIsAuthenticated(): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
   return invoke<boolean>("copilot_is_authenticated");
 }
 
@@ -118,6 +133,7 @@ export interface CopilotModel {
  * @returns Copilot Token
  */
 export async function copilotGetToken(): Promise<string> {
+  if (!isTauriRuntime()) throw new Error("Copilot token is not available in web mode");
   return invoke<string>("copilot_get_token");
 }
 
@@ -127,6 +143,7 @@ export async function copilotGetToken(): Promise<string> {
  * @returns 可用模型列表
  */
 export async function copilotGetModels(): Promise<CopilotModel[]> {
+  if (!isTauriRuntime()) return [];
   return invoke<CopilotModel[]>("copilot_get_models");
 }
 
@@ -164,6 +181,7 @@ export interface CopilotUsageResponse {
  * @returns 使用量信息，包含计划类型、重置日期和配额快照
  */
 export async function copilotGetUsage(): Promise<CopilotUsageResponse> {
+  if (!isTauriRuntime()) throw new Error("Copilot usage is not available in web mode");
   return invoke<CopilotUsageResponse>("copilot_get_usage");
 }
 
@@ -175,6 +193,7 @@ export async function copilotGetUsage(): Promise<CopilotUsageResponse> {
  * @returns 账号列表
  */
 export async function copilotListAccounts(): Promise<GitHubAccount[]> {
+  if (!isTauriRuntime()) return [];
   return invoke<GitHubAccount[]>("copilot_list_accounts");
 }
 
@@ -190,6 +209,7 @@ export async function copilotListAccounts(): Promise<GitHubAccount[]> {
 export async function copilotPollForAccount(
   deviceCode: string,
 ): Promise<GitHubAccount | null> {
+  if (!isTauriRuntime()) return null;
   return invoke<GitHubAccount | null>("copilot_poll_for_account", {
     deviceCode,
   });
@@ -201,6 +221,7 @@ export async function copilotPollForAccount(
  * @param accountId - GitHub 用户 ID
  */
 export async function copilotRemoveAccount(accountId: string): Promise<void> {
+  if (!isTauriRuntime()) return;
   return invoke("copilot_remove_account", { accountId });
 }
 
@@ -212,6 +233,7 @@ export async function copilotRemoveAccount(accountId: string): Promise<void> {
 export async function copilotSetDefaultAccount(
   accountId: string,
 ): Promise<void> {
+  if (!isTauriRuntime()) return;
   return invoke("copilot_set_default_account", { accountId });
 }
 

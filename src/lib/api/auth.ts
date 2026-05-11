@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isTauriRuntime } from "./http";
 
 export type ManagedAuthProvider = "github_copilot" | "codex_oauth";
 
@@ -33,6 +34,7 @@ export async function authStartLogin(
   authProvider: ManagedAuthProvider,
   githubDomain?: string,
 ): Promise<ManagedAuthDeviceCodeResponse> {
+  if (!isTauriRuntime()) throw new Error("Auth is not available in web mode");
   return invoke<ManagedAuthDeviceCodeResponse>("auth_start_login", {
     authProvider,
     githubDomain: githubDomain || null,
@@ -44,6 +46,7 @@ export async function authPollForAccount(
   deviceCode: string,
   githubDomain?: string,
 ): Promise<ManagedAuthAccount | null> {
+  if (!isTauriRuntime()) return null;
   return invoke<ManagedAuthAccount | null>("auth_poll_for_account", {
     authProvider,
     deviceCode,
@@ -54,6 +57,7 @@ export async function authPollForAccount(
 export async function authListAccounts(
   authProvider: ManagedAuthProvider,
 ): Promise<ManagedAuthAccount[]> {
+  if (!isTauriRuntime()) return [];
   return invoke<ManagedAuthAccount[]>("auth_list_accounts", {
     authProvider,
   });
@@ -62,6 +66,14 @@ export async function authListAccounts(
 export async function authGetStatus(
   authProvider: ManagedAuthProvider,
 ): Promise<ManagedAuthStatus> {
+  if (!isTauriRuntime()) {
+    return {
+      provider: authProvider,
+      authenticated: false,
+      default_account_id: null,
+      accounts: [],
+    };
+  }
   return invoke<ManagedAuthStatus>("auth_get_status", {
     authProvider,
   });
@@ -71,6 +83,7 @@ export async function authRemoveAccount(
   authProvider: ManagedAuthProvider,
   accountId: string,
 ): Promise<void> {
+  if (!isTauriRuntime()) return;
   return invoke("auth_remove_account", {
     authProvider,
     accountId,
@@ -81,6 +94,7 @@ export async function authSetDefaultAccount(
   authProvider: ManagedAuthProvider,
   accountId: string,
 ): Promise<void> {
+  if (!isTauriRuntime()) return;
   return invoke("auth_set_default_account", {
     authProvider,
     accountId,
@@ -90,6 +104,7 @@ export async function authSetDefaultAccount(
 export async function authLogout(
   authProvider: ManagedAuthProvider,
 ): Promise<void> {
+  if (!isTauriRuntime()) return;
   return invoke("auth_logout", {
     authProvider,
   });
