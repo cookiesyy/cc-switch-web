@@ -1,10 +1,11 @@
 import { createServer } from "node:http";
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, extname, join, normalize, basename } from "node:path";
+import { dirname, extname, join, normalize, basename, relative } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import YAML from "yaml";
+import { createHash } from "node:crypto";
 
 const HOST = process.env.CC_SWITCH_WEB_HOST || "0.0.0.0";
 const PORT = Number(process.env.CC_SWITCH_WEB_PORT || 15730);
@@ -36,6 +37,10 @@ const defaultState = () => ({
   skillRepos: [],
   prompts: Object.fromEntries(APPS.map((app) => [app, {}])),
   skillBackups: [],
+  omoCurrent: {
+    standard: "",
+    slim: "",
+  },
 });
 
 async function ensureDir(path) {
@@ -83,6 +88,7 @@ async function loadState() {
     prompts: { ...defaultState().prompts, ...(state.prompts || {}) },
     skillRepos: Array.isArray(state.skillRepos) ? state.skillRepos : [],
     skillBackups: Array.isArray(state.skillBackups) ? state.skillBackups : [],
+    omoCurrent: { ...defaultState().omoCurrent, ...(state.omoCurrent || {}) },
   };
 }
 
@@ -376,9 +382,15 @@ async function scanSkillsFromAppDir(app) {
   const root = skillTargetDir(app);
   if (!existsSync(root)) return [];
   const entries = await readdir(root, { withFileTypes: true });
+  const managedNames = new Set(
+    Object.values(await loadState().then((state) => state.skills || {})).map((skill) =>
+      basename(skill.directory),
+    ),
+  );
   const results = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    if (managedNames.has(entry.name)) continue;
     const dir = join(root, entry.name);
     results.push({
       directory: entry.name,
@@ -434,6 +446,31 @@ async function readOmoLocalFile(variant) {
   };
 }
 
+function omoCurrentKey(variant) {
+  return variant === "omo-slim" ? "slim" : "standard";
+}
+
+async function writeOmoConfigFromProvider(provider, variant) {
+  const meta = omoVariantMeta(variant);
+  const preferredPath = join(homedir(), ".config", "opencode", meta.preferredFilename);
+  const settings = provider.settingsConfig || {};
+  const payload = {
+    ...(settings.otherFields && typeof settings.otherFields === "object"
+      ? settings.otherFields
+      : {}),
+    ...(settings.agents ? { agents: settings.agents } : {}),
+    ...(variant === "omo" && settings.categories ? { categories: settings.categories } : {}),
+  };
+
+  await ensureDir(dirname(preferredPath));
+  for (const path of omoConfigPathCandidates(variant)) {
+    if (path !== preferredPath) {
+      await rm(path, { force: true });
+    }
+  }
+  await writeTextAtomic(preferredPath, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
 async function extractZipToDir(buffer, destinationDir) {
   await rm(destinationDir, { recursive: true, force: true });
   await ensureDir(destinationDir);
@@ -467,6 +504,106 @@ async function extractZipToDir(buffer, destinationDir) {
   });
 
   await rm(zipPath, { force: true });
+}
+
+async function listFilesRecursive(dir) {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await listFilesRecursive(full)));
+    } else {
+      files.push(full);
+    }
+  }
+  return files.sort();
+}
+
+async function computeDirHash(dir) {
+  const files = await listFilesRecursive(dir);
+  const hash = createHash("sha256");
+  for (const file of files) {
+    hash.update(relative(dir, file));
+    hash.update("\0");
+    hash.update(await readFile(file));
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function parseSkillNameDesc(markdown, fallbackName) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const heading = lines.find((line) => line.trim().startsWith("#"));
+  const name = heading ? heading.replace(/^#+\s*/, "").trim() : fallbackName;
+  const description = lines
+    .slice(lines.indexOf(heading) + 1)
+    .find((line) => line.trim());
+  return {
+    name: name || fallbackName,
+    description: description?.trim() || "",
+  };
+}
+
+async function discoverSkillsInRepo(repo) {
+  const url = `https://codeload.github.com/${repo.owner}/${repo.name}/zip/refs/heads/${repo.branch || "main"}`;
+  const response = await fetch(url, { headers: { "User-Agent": "cc-switch-web" } });
+  if (!response.ok) throw new Error(`Failed to download repo: HTTP ${response.status}`);
+
+  const tmpDir = join(DATA_DIR, "tmp", `${repo.owner}-${repo.name}-${Date.now()}`);
+  await extractZipToDir(Buffer.from(await response.arrayBuffer()), tmpDir);
+
+  const rootEntries = await readdir(tmpDir, { withFileTypes: true });
+  const repoRoot =
+    rootEntries.length === 1 && rootEntries[0].isDirectory()
+      ? join(tmpDir, rootEntries[0].name)
+      : tmpDir;
+
+  const discovered = [];
+  async function scan(dir) {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const hasSkillMd = entries.some(
+      (entry) => entry.isFile() && entry.name.toUpperCase() === "SKILL.MD",
+    );
+    if (hasSkillMd) {
+      const skillMdPath = join(dir, "SKILL.md");
+      const content = await readFile(skillMdPath, "utf8");
+      const meta = parseSkillNameDesc(content, basename(dir));
+      const relDir = relative(repoRoot, dir) || basename(dir);
+      discovered.push({
+        key: `${basename(dir).toLowerCase()}:${repo.owner.toLowerCase()}:${repo.name.toLowerCase()}`,
+        name: meta.name,
+        description: meta.description,
+        directory: relDir,
+        readmeUrl: `https://github.com/${repo.owner}/${repo.name}/blob/${repo.branch || "main"}/${relDir.replace(/\\/g, "/")}/SKILL.md`,
+        repoOwner: repo.owner,
+        repoName: repo.name,
+        repoBranch: repo.branch || "main",
+        _localDir: dir,
+      });
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith(".")) {
+        await scan(join(dir, entry.name));
+      }
+    }
+  }
+  await scan(repoRoot);
+  return { discovered, tmpDir, repoRoot };
+}
+
+async function createSkillBackupEntry(skill) {
+  const backupId = `backup-${Date.now()}`;
+  const backupPath = join(DATA_DIR, "backups", "skills", backupId);
+  await ensureDir(dirname(backupPath));
+  await cp(skill.directory, backupPath, { recursive: true });
+  return {
+    backupId,
+    backupPath,
+    createdAt: Math.floor(Date.now() / 1000),
+    skill,
+  };
 }
 
 async function applyProviderToLive(app, provider) {
@@ -828,8 +965,14 @@ async function route(req, res) {
     if (parts.length === 5 && parts[4] === "switch" && req.method === "POST") {
       const provider = state.providers[app]?.[id];
       if (!provider) throw new Error(`Provider not found: ${id}`);
-      state.current[app] = id;
-      await applyProviderToLive(app, provider);
+      if (app === "opencode" && (provider.category === "omo" || provider.category === "omo-slim")) {
+        const variant = provider.category;
+        await writeOmoConfigFromProvider(provider, variant);
+        state.omoCurrent[omoCurrentKey(variant)] = id;
+      } else {
+        state.current[app] = id;
+        await applyProviderToLive(app, provider);
+      }
       await saveState(state);
       return sendJson(res, 200, { warnings: [] });
     }
@@ -1018,10 +1161,7 @@ async function route(req, res) {
       const skill = state.skills?.[id];
       if (skill) {
         state.skillBackups.unshift({
-          backupId: `backup-${Date.now()}`,
-          backupPath: skill.directory,
-          createdAt: Math.floor(Date.now() / 1000),
-          skill,
+          ...(await createSkillBackupEntry(skill)),
         });
         for (const app of APPS) {
           await syncSkillToApp(skill, app, false);
@@ -1035,6 +1175,10 @@ async function route(req, res) {
       const { backupId, currentApp } = await readBody(req);
       const backup = (state.skillBackups || []).find((item) => item.backupId === backupId);
       if (!backup) throw new Error(`Skill backup not found: ${backupId}`);
+      const restoreDir = backup.skill.directory;
+      await rm(restoreDir, { recursive: true, force: true });
+      await ensureDir(dirname(restoreDir));
+      await cp(backup.backupPath, restoreDir, { recursive: true });
       const restored = {
         ...backup.skill,
         apps: {
@@ -1050,14 +1194,15 @@ async function route(req, res) {
     }
     if (parts[2] === "delete-backup" && req.method === "POST") {
       const { backupId } = await readBody(req);
+      const backup = (state.skillBackups || []).find((item) => item.backupId === backupId);
+      if (backup) {
+        await rm(backup.backupPath, { recursive: true, force: true });
+      }
       state.skillBackups = (state.skillBackups || []).filter(
         (item) => item.backupId !== backupId,
       );
       await saveState(state);
       return sendJson(res, 200, true);
-    }
-    if (parts[2] === "restore-backup" && req.method === "POST") {
-      throw new Error("Skill backup restore is not implemented in web mode");
     }
     if (parts[2] === "scan-unmanaged" && req.method === "GET") {
       const grouped = new Map();
@@ -1104,36 +1249,85 @@ async function route(req, res) {
       return sendJson(res, 200, installed);
     }
     if (parts[2] === "discover" && req.method === "GET") {
-      const repos = state.skillRepos || [];
-      const items = repos.map((repo) => ({
-        key: `${repo.owner}/${repo.name}:${repo.branch || "main"}`,
-        name: repo.name,
-        description: `Repository ${repo.owner}/${repo.name}`,
-        directory: repo.name,
-        readmeUrl: `https://github.com/${repo.owner}/${repo.name}/blob/${repo.branch || "main"}/README.md`,
-        repoOwner: repo.owner,
-        repoName: repo.name,
-        repoBranch: repo.branch || "main",
-      }));
+      const items = [];
+      for (const repo of state.skillRepos || []) {
+        if (repo.enabled === false) continue;
+        try {
+          const { discovered, tmpDir } = await discoverSkillsInRepo(repo);
+          items.push(...discovered.map(({ _localDir, ...rest }) => rest));
+          await rm(tmpDir, { recursive: true, force: true });
+        } catch (error) {
+          console.warn(`Failed to discover skills from ${repo.owner}/${repo.name}`, error);
+        }
+      }
       return sendJson(res, 200, items);
     }
     if (parts[2] === "check-updates" && req.method === "GET") {
-      const updates = Object.values(state.skills || [])
-        .filter((skill) => skill.repoOwner && skill.repoName)
-        .map((skill) => ({
-          id: skill.id,
-          name: skill.name,
-          currentHash: skill.contentHash || "",
-          remoteHash: `remote-${skill.id}`,
-        }));
+      const updates = [];
+      const installedSkills = Object.values(state.skills || {}).filter(
+        (skill) => skill.repoOwner && skill.repoName,
+      );
+      for (const skill of installedSkills) {
+        try {
+          const repo = {
+            owner: skill.repoOwner,
+            name: skill.repoName,
+            branch: skill.repoBranch || "main",
+          };
+          const { discovered, tmpDir } = await discoverSkillsInRepo(repo);
+          const remote = discovered.find(
+            (item) => basename(item.directory).toLowerCase() === basename(skill.directory).toLowerCase(),
+          );
+          if (!remote) {
+            await rm(tmpDir, { recursive: true, force: true });
+            continue;
+          }
+          const remoteHash = await computeDirHash(remote._localDir);
+          const currentHash = skill.contentHash || (existsSync(skill.directory)
+            ? await computeDirHash(skill.directory)
+            : "");
+          if (currentHash !== remoteHash) {
+            updates.push({
+              id: skill.id,
+              name: skill.name,
+              currentHash,
+              remoteHash,
+            });
+          }
+          await rm(tmpDir, { recursive: true, force: true });
+        } catch (error) {
+          console.warn(`Failed to check updates for ${skill.id}`, error);
+        }
+      }
       return sendJson(res, 200, updates);
     }
     if (parts[2] === "update" && req.method === "POST") {
       const { id } = await readBody(req);
       const skill = state.skills?.[id];
       if (!skill) throw new Error(`Skill not found: ${id}`);
+      if (!skill.repoOwner || !skill.repoName) throw new Error("Cannot update local skill");
+      const repo = {
+        owner: skill.repoOwner,
+        name: skill.repoName,
+        branch: skill.repoBranch || "main",
+      };
+      const { discovered, tmpDir } = await discoverSkillsInRepo(repo);
+      const remote = discovered.find(
+        (item) => basename(item.directory).toLowerCase() === basename(skill.directory).toLowerCase(),
+      );
+      if (!remote) throw new Error(`Remote skill not found for ${skill.name}`);
+      await rm(skill.directory, { recursive: true, force: true });
+      await ensureDir(dirname(skill.directory));
+      await cp(remote._localDir, skill.directory, { recursive: true });
+      skill.contentHash = await computeDirHash(skill.directory);
+      skill.name = remote.name;
+      skill.description = remote.description;
+      skill.readmeUrl = remote.readmeUrl;
+      skill.repoBranch = remote.repoBranch;
       skill.updatedAt = Date.now();
+      await syncSkillEverywhere(skill);
       await saveState(state);
+      await rm(tmpDir, { recursive: true, force: true });
       return sendJson(res, 200, skill);
     }
     if (parts[2] === "repos" && req.method === "GET") {
@@ -1322,17 +1516,10 @@ async function route(req, res) {
       return sendJson(res, 200, await readOmoLocalFile(variant));
     }
     if (parts[3] === "current-provider-id" && req.method === "GET") {
-      const current = Object.values(state.providers.opencode || {}).find(
-        (provider) => provider.category === variant && state.current.opencode === provider.id,
-      );
-      return sendJson(res, 200, current?.id || "");
+      return sendJson(res, 200, state.omoCurrent[omoCurrentKey(variant)] || "");
     }
     if (parts[3] === "disable-current" && req.method === "POST") {
-      for (const [id, provider] of Object.entries(state.providers.opencode || {})) {
-        if (provider.category === variant && state.current.opencode === id) {
-          state.current.opencode = "";
-        }
-      }
+      state.omoCurrent[omoCurrentKey(variant)] = "";
       for (const path of omoConfigPathCandidates(variant)) {
         await rm(path, { force: true });
       }
