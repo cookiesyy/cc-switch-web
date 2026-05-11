@@ -121,6 +121,20 @@ export async function authLogout(
   });
 }
 
+export async function authAddManualAccount(
+  authProvider: ManagedAuthProvider,
+  account: ManagedAuthAccount,
+): Promise<void> {
+  if (!isTauriRuntime()) {
+    await apiRequest(`/api/auth/${authProvider}/manual-account`, {
+      method: "POST",
+      body: JSON.stringify(account),
+    });
+    return;
+  }
+  throw new Error("Manual auth account add is only implemented for web mode");
+}
+
 export const authApi = {
   authStartLogin,
   authPollForAccount,
@@ -129,4 +143,5 @@ export const authApi = {
   authRemoveAccount,
   authSetDefaultAccount,
   authLogout,
+  authAddManualAccount,
 };

@@ -137,6 +137,10 @@ function getDb() {
       model_id TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS usage_request_logs_store (
+      request_id TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS sessions_store (
       provider_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
@@ -365,6 +369,30 @@ function getUsageModelPricing() {
   return rows.map((row) => JSON.parse(row.value));
 }
 
+function listUsageRequestLogs() {
+  return getDb()
+    .prepare("SELECT value FROM usage_request_logs_store ORDER BY request_id DESC")
+    .all()
+    .map((row) => JSON.parse(row.value));
+}
+
+function upsertUsageRequestLog(log) {
+  getDb()
+    .prepare(`
+      INSERT INTO usage_request_logs_store(request_id, value)
+      VALUES(?, ?)
+      ON CONFLICT(request_id) DO UPDATE SET value = excluded.value
+    `)
+    .run(log.requestId, JSON.stringify(log));
+}
+
+function getUsageRequestLog(requestId) {
+  const row = getDb()
+    .prepare("SELECT value FROM usage_request_logs_store WHERE request_id = ? LIMIT 1")
+    .get(requestId);
+  return row?.value ? JSON.parse(row.value) : null;
+}
+
 function saveUsageModelPricing(pricing) {
   const database = getDb();
   database.exec("BEGIN");
@@ -391,6 +419,23 @@ function listSessions() {
     .prepare("SELECT meta FROM sessions_store ORDER BY provider_id, session_id")
     .all()
     .map((row) => JSON.parse(row.meta));
+}
+
+function upsertSession(meta, messages = []) {
+  getDb()
+    .prepare(`
+      INSERT INTO sessions_store(provider_id, session_id, source_path, meta, messages)
+      VALUES(?, ?, ?, ?, ?)
+      ON CONFLICT(provider_id, session_id, source_path)
+      DO UPDATE SET meta = excluded.meta, messages = excluded.messages
+    `)
+    .run(
+      meta.providerId,
+      meta.sessionId,
+      meta.sourcePath || "",
+      JSON.stringify(meta),
+      JSON.stringify(messages),
+    );
 }
 
 function getSessionMessages(providerId, sourcePath) {
@@ -1806,6 +1851,12 @@ async function route(req, res) {
   }
 
   if (parts[0] === "api" && parts[1] === "usage") {
+    if (parts[2] === "request-log" && req.method === "POST") {
+      const log = await readBody(req);
+      if (!log?.requestId) throw new Error("requestId is required");
+      upsertUsageRequestLog(log);
+      return sendJson(res, 200, true);
+    }
     if (parts[2] === "query" && req.method === "POST") {
       return sendJson(res, 200, { success: false, error: "Usage query backend not implemented yet" });
     }
@@ -1825,10 +1876,12 @@ async function route(req, res) {
     if (parts[2] === "model-stats" && req.method === "GET") return sendJson(res, 200, []);
     if (parts[2] === "request-logs" && req.method === "POST") {
       const { page = 0, pageSize = 20 } = await readBody(req);
-      return sendJson(res, 200, { data: [], total: 0, page, pageSize });
+      const rows = listUsageRequestLogs();
+      const data = rows.slice(page * pageSize, page * pageSize + pageSize);
+      return sendJson(res, 200, { data, total: rows.length, page, pageSize });
     }
     if (parts[2] === "request-detail" && parts[3] && req.method === "GET") {
-      return sendJson(res, 200, null);
+      return sendJson(res, 200, getUsageRequestLog(decodeURIComponent(parts[3])));
     }
     if (parts[2] === "model-pricing" && req.method === "GET") {
       return sendJson(res, 200, getUsageModelPricing());
@@ -1861,6 +1914,12 @@ async function route(req, res) {
   }
 
   if (parts[0] === "api" && parts[1] === "sessions") {
+    if (parts[2] === "upsert" && req.method === "POST") {
+      const { meta, messages } = await readBody(req);
+      if (!meta?.providerId || !meta?.sessionId) throw new Error("session meta is incomplete");
+      upsertSession(meta, messages || []);
+      return sendJson(res, 200, true);
+    }
     if (parts[2] === "list" && req.method === "GET") {
       return sendJson(res, 200, listSessions());
     }
@@ -1956,6 +2015,12 @@ async function route(req, res) {
 
   if (parts[0] === "api" && parts[1] === "auth") {
     const provider = parts[2];
+    if (parts[3] === "manual-account" && req.method === "POST") {
+      const account = await readBody(req);
+      if (!account?.id) throw new Error("account.id is required");
+      upsertAuthAccount(provider, account);
+      return sendJson(res, 200, true);
+    }
     if (parts[3] === "accounts" && req.method === "POST") {
       const account = await readBody(req);
       upsertAuthAccount(provider, account);
@@ -1993,6 +2058,12 @@ async function route(req, res) {
   }
 
   if (parts[0] === "api" && parts[1] === "copilot") {
+    if (parts[2] === "manual-account" && req.method === "POST") {
+      const account = await readBody(req);
+      if (!account?.id) throw new Error("account.id is required");
+      upsertAuthAccount("github_copilot", account);
+      return sendJson(res, 200, true);
+    }
     if (parts[2] === "status" && req.method === "GET") {
       const status = getAuthStatus("github_copilot");
       return sendJson(res, 200, {

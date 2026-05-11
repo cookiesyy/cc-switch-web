@@ -19,6 +19,15 @@ import { isTauriRuntime } from "./http";
 import { apiRequest } from "./http";
 
 export const usageApi = {
+  upsertRequestLog: async (log: RequestLog): Promise<boolean> => {
+    if (!isTauriRuntime()) {
+      return apiRequest("/api/usage/request-log", {
+        method: "POST",
+        body: JSON.stringify(log),
+      });
+    }
+    return true;
+  },
   // Provider usage script methods
   query: async (providerId: string, appId: AppId): Promise<UsageResult> => {
     if (!isTauriRuntime()) {

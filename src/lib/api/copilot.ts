@@ -244,6 +244,19 @@ export async function copilotSetDefaultAccount(
   return invoke("copilot_set_default_account", { accountId });
 }
 
+export async function copilotAddManualAccount(
+  account: GitHubAccount,
+): Promise<void> {
+  if (!isTauriRuntime()) {
+    await apiRequest("/api/copilot/manual-account", {
+      method: "POST",
+      body: JSON.stringify(account),
+    });
+    return;
+  }
+  throw new Error("Manual copilot account add is only implemented for web mode");
+}
+
 /**
  * 获取指定账号的有效 Copilot Token
  *

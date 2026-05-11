@@ -14,6 +14,15 @@ export interface DeleteSessionResult extends DeleteSessionOptions {
 }
 
 export const sessionsApi = {
+  async upsert(meta: SessionMeta, messages: SessionMessage[]): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return apiRequest("/api/sessions/upsert", {
+        method: "POST",
+        body: JSON.stringify({ meta, messages }),
+      });
+    }
+    return true;
+  },
   async list(): Promise<SessionMeta[]> {
     if (!isTauriRuntime()) return apiRequest("/api/sessions/list");
     return await invoke("list_sessions");
