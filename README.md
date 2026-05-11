@@ -130,6 +130,12 @@ cp .env.example .env
 docker compose -f docker-compose.caddy.yml up -d --build
 ```
 
+Requirements for Caddy automatic HTTPS:
+
+- A public domain name pointing to your server
+- Ports `80` and `443` reachable from the internet
+- A valid email / certificate flow allowed by your DNS and firewall
+
 Generate a Caddy password hash:
 
 ```bash
