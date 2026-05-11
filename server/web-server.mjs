@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, extname, join, normalize, basename } from "node:path";
 import { homedir } from "node:os";
@@ -203,6 +203,10 @@ function geminiSettingsPath() {
   return join(homedir(), ".gemini", "settings.json");
 }
 
+function geminiEnvPath() {
+  return join(homedir(), ".gemini", ".env");
+}
+
 function opencodeConfigPath() {
   return join(homedir(), ".config", "opencode", "opencode.json");
 }
@@ -213,6 +217,27 @@ function openclawConfigPath() {
 
 function hermesConfigPath() {
   return join(homedir(), ".hermes", "config.yaml");
+}
+
+function skillTargetDir(app) {
+  switch (app) {
+    case "claude":
+      return join(homedir(), ".claude", "skills");
+    case "claude-desktop":
+      return join(homedir(), ".claude-desktop", "skills");
+    case "codex":
+      return join(homedir(), ".codex", "skills");
+    case "gemini":
+      return join(homedir(), ".gemini", "skills");
+    case "opencode":
+      return join(homedir(), ".config", "opencode", "skills");
+    case "openclaw":
+      return join(homedir(), ".openclaw", "skills");
+    case "hermes":
+      return join(homedir(), ".hermes", "skills");
+    default:
+      throw new Error(`Unsupported app: ${app}`);
+  }
 }
 
 function hermesMemoriesDir() {
@@ -229,6 +254,33 @@ async function readJsonFileOr(path, fallback) {
     return JSON.parse(await readFile(path, "utf8"));
   } catch {
     return fallback;
+  }
+}
+
+function serializeEnvMap(map) {
+  return Object.entries(map || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
+
+async function syncSkillToApp(skill, app, enabled) {
+  const sourceDir = skill.directory;
+  const targetRoot = skillTargetDir(app);
+  const targetDir = join(targetRoot, basename(sourceDir));
+  if (enabled) {
+    await ensureDir(targetRoot);
+    await rm(targetDir, { recursive: true, force: true });
+    await cp(sourceDir, targetDir, { recursive: true });
+  } else {
+    await rm(targetDir, { recursive: true, force: true });
+  }
+}
+
+async function syncSkillEverywhere(skill) {
+  const apps = skill.apps || {};
+  for (const app of APPS) {
+    await syncSkillToApp(skill, app, Boolean(apps[app]));
   }
 }
 
@@ -294,10 +346,10 @@ async function applyProviderToLive(app, provider) {
   }
 
   if (app === "gemini") {
-    const settings = provider.settingsConfig;
-    if (settings && typeof settings === "object") {
-      await backupExistingFile(geminiSettingsPath());
-      await writeJsonAtomic(geminiSettingsPath(), settings);
+    const env = provider.settingsConfig?.env;
+    if (env && typeof env === "object") {
+      await backupExistingFile(geminiEnvPath());
+      await writeTextAtomic(geminiEnvPath(), `${serializeEnvMap(env)}\n`);
     }
     return;
   }
@@ -305,8 +357,14 @@ async function applyProviderToLive(app, provider) {
   if (app === "opencode") {
     const settings = provider.settingsConfig;
     if (settings && typeof settings === "object") {
+      const existing = await readJsonFileOr(opencodeConfigPath(), {
+        $schema: "https://opencode.ai/config.json",
+        provider: {},
+      });
+      existing.provider = existing.provider || {};
+      existing.provider[provider.id] = settings;
       await backupExistingFile(opencodeConfigPath());
-      await writeJsonAtomic(opencodeConfigPath(), settings);
+      await writeJsonAtomic(opencodeConfigPath(), existing);
     }
     return;
   }
@@ -314,8 +372,15 @@ async function applyProviderToLive(app, provider) {
   if (app === "openclaw") {
     const settings = provider.settingsConfig;
     if (settings && typeof settings === "object") {
+      const existing = await readJsonFileOr(openclawConfigPath(), {
+        models: { mode: "merge", providers: {} },
+      });
+      existing.models = existing.models || {};
+      existing.models.mode = existing.models.mode || "merge";
+      existing.models.providers = existing.models.providers || {};
+      existing.models.providers[provider.id] = settings;
       await backupExistingFile(openclawConfigPath());
-      await writeJsonAtomic(openclawConfigPath(), settings);
+      await writeJsonAtomic(openclawConfigPath(), existing);
     }
     return;
   }
@@ -323,10 +388,33 @@ async function applyProviderToLive(app, provider) {
   if (app === "hermes") {
     const settings = provider.settingsConfig;
     if (settings && typeof settings === "object") {
+      const existing = await readJsonFileOr(hermesConfigPath(), {});
+      const providerName = settings.name || provider.id;
+      const nextProvider = {
+        ...settings,
+        name: providerName,
+      };
+      const providers = Array.isArray(existing.custom_providers)
+        ? existing.custom_providers.filter((item) => item?.name !== providerName)
+        : [];
+      providers.push(nextProvider);
+      existing.custom_providers = providers;
+
+      const firstModel =
+        Array.isArray(settings.models) && settings.models.length > 0
+          ? settings.models[0].id
+          : settings.model || existing.model?.default;
+      existing.model = {
+        ...(existing.model || {}),
+        default: firstModel,
+        provider: providerName,
+        ...(settings.base_url ? { base_url: settings.base_url } : {}),
+      };
+
       await backupExistingFile(hermesConfigPath());
       await writeTextAtomic(
         hermesConfigPath(),
-        `${JSON.stringify(settings, null, 2)}\n`,
+        `${JSON.stringify(existing, null, 2)}\n`,
       );
     }
   }
@@ -510,7 +598,7 @@ async function route(req, res) {
         if (shouldWriteLive) {
           await applyProviderToLive(app, provider);
         }
-      } else if (!state.current[app]) {
+      } else if (!state.current[app] || !state.providers[app][state.current[app]]) {
         state.current[app] = provider.id;
         await applyProviderToLive(app, provider);
       }
@@ -659,6 +747,7 @@ async function route(req, res) {
         updatedAt: Date.now(),
       };
       state.skills[id] = installedSkill;
+      await syncSkillEverywhere(installedSkill);
       await saveState(state);
       return sendJson(res, 200, installedSkill);
     }
@@ -689,6 +778,7 @@ async function route(req, res) {
         updatedAt: Date.now(),
       };
       state.skills[id] = installedSkill;
+      await syncSkillEverywhere(installedSkill);
       await saveState(state);
       return sendJson(res, 200, [installedSkill]);
     }
@@ -699,11 +789,18 @@ async function route(req, res) {
       if (!skill) throw new Error(`Skill not found: ${id}`);
       skill.apps = skill.apps || {};
       skill.apps[app] = Boolean(enabled);
+      await syncSkillToApp(skill, app, Boolean(enabled));
       await saveState(state);
       return sendJson(res, 200, true);
     }
     if (parts[2] === "uninstall" && req.method === "POST") {
       const { id } = await readBody(req);
+      const skill = state.skills?.[id];
+      if (skill) {
+        for (const app of APPS) {
+          await syncSkillToApp(skill, app, false);
+        }
+      }
       delete state.skills[id];
       await saveState(state);
       return sendJson(res, 200, {});
