@@ -4,6 +4,7 @@ import type {
   HermesMemoryLimits,
   HermesModelConfig,
 } from "@/types";
+import { apiRequest, isTauriRuntime } from "./http";
 
 /**
  * Hermes Agent configuration API (CC Switch side).
@@ -17,6 +18,9 @@ import type {
  */
 export const hermesApi = {
   async getModelConfig(): Promise<HermesModelConfig | null> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/hermes/model-config");
+    }
     return await invoke("get_hermes_model_config");
   },
 
@@ -25,6 +29,11 @@ export const hermesApi = {
    * Optional `path` lets callers deep-link to specific pages like `/config`.
    */
   async openWebUI(path?: string): Promise<void> {
+    if (!isTauriRuntime()) {
+      const url = `http://127.0.0.1:9119${path ?? ""}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
     await invoke("open_hermes_web_ui", { path: path ?? null });
   },
 
@@ -38,11 +47,21 @@ export const hermesApi = {
    * empty string when the file hasn't been created yet.
    */
   async getMemory(kind: HermesMemoryKind): Promise<string> {
+    if (!isTauriRuntime()) {
+      return await apiRequest(`/api/hermes/memory/${kind}`);
+    }
     return await invoke("get_hermes_memory", { kind });
   },
 
   /** Atomically overwrite a Hermes memory file. */
   async setMemory(kind: HermesMemoryKind, content: string): Promise<void> {
+    if (!isTauriRuntime()) {
+      await apiRequest(`/api/hermes/memory/${kind}`, {
+        method: "PUT",
+        body: JSON.stringify({ content }),
+      });
+      return;
+    }
     await invoke("set_hermes_memory", { kind, content });
   },
 
@@ -51,6 +70,9 @@ export const hermesApi = {
    * config.yaml with Hermes defaults as fallback.
    */
   async getMemoryLimits(): Promise<HermesMemoryLimits> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/hermes/memory-limits");
+    }
     return await invoke("get_hermes_memory_limits");
   },
 
@@ -62,6 +84,13 @@ export const hermesApi = {
     kind: HermesMemoryKind,
     enabled: boolean,
   ): Promise<void> {
+    if (!isTauriRuntime()) {
+      await apiRequest(`/api/hermes/memory-enabled/${kind}`, {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      });
+      return;
+    }
     await invoke("set_hermes_memory_enabled", { kind, enabled });
   },
 };

@@ -52,6 +52,31 @@ export const promptsApi = {
   },
 
   async importFromFile(app: AppId): Promise<string> {
+    if (!isTauriRuntime()) {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".md,.txt,text/markdown,text/plain";
+      return await new Promise<string>((resolve, reject) => {
+        input.onchange = async () => {
+          try {
+            const file = input.files?.[0];
+            if (!file) return reject(new Error("No file selected"));
+            const content = await file.text();
+            const id = await apiRequest(`/api/prompts/${app}/import`, {
+              method: "POST",
+              body: JSON.stringify({
+                fileName: file.name,
+                content,
+              }),
+            });
+            resolve(id as string);
+          } catch (error) {
+            reject(error);
+          }
+        };
+        input.click();
+      });
+    }
     return await invoke("import_prompt_from_file", { app });
   },
 

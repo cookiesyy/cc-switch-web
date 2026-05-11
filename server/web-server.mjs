@@ -1,8 +1,9 @@
 import { createServer } from "node:http";
-import { copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, extname, join, normalize, basename } from "node:path";
 import { homedir } from "node:os";
+import { spawn } from "node:child_process";
 
 const HOST = process.env.CC_SWITCH_WEB_HOST || "0.0.0.0";
 const PORT = Number(process.env.CC_SWITCH_WEB_PORT || 15730);
@@ -212,6 +213,58 @@ function openclawConfigPath() {
 
 function hermesConfigPath() {
   return join(homedir(), ".hermes", "config.yaml");
+}
+
+function hermesMemoriesDir() {
+  return join(homedir(), ".hermes", "memories");
+}
+
+function hermesMemoryPath(kind) {
+  return join(hermesMemoriesDir(), kind === "user" ? "USER.md" : "MEMORY.md");
+}
+
+async function readJsonFileOr(path, fallback) {
+  if (!existsSync(path)) return fallback;
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+async function extractZipToDir(buffer, destinationDir) {
+  await rm(destinationDir, { recursive: true, force: true });
+  await ensureDir(destinationDir);
+  const zipPath = join(DATA_DIR, `.upload-${Date.now()}.zip`);
+  await writeFile(zipPath, buffer, { mode: 0o600 });
+
+  await new Promise((resolve, reject) => {
+    const child = spawn("python3", [
+      "-c",
+      [
+        "import sys, zipfile, os",
+        "zip_path=sys.argv[1]",
+        "dest=sys.argv[2]",
+        "os.makedirs(dest, exist_ok=True)",
+        "z=zipfile.ZipFile(zip_path)",
+        "z.extractall(dest)",
+        "z.close()",
+      ].join("; "),
+      zipPath,
+      destinationDir,
+    ]);
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code) => {
+      if (code === 0) resolve(undefined);
+      else reject(new Error(stderr || `zip extraction failed: exit ${code}`));
+    });
+    child.on("error", reject);
+  });
+
+  await rm(zipPath, { force: true });
 }
 
 async function applyProviderToLive(app, provider) {
@@ -610,14 +663,27 @@ async function route(req, res) {
       return sendJson(res, 200, installedSkill);
     }
     if (parts[2] === "install-zip" && req.method === "POST") {
-      const { fileName, currentApp } = await readBody(req);
-      const directory = String(fileName || "uploaded-skill").replace(/\.zip$/i, "");
-      const id = directory;
+      const { fileName, currentApp, contentBase64 } = await readBody(req);
+      const directoryName = String(fileName || "uploaded-skill").replace(/\.zip$/i, "");
+      const destinationDir = join(DATA_DIR, "skills", directoryName);
+      if (contentBase64) {
+        await extractZipToDir(Buffer.from(String(contentBase64), "base64"), destinationDir);
+      }
+      let finalDirectory = destinationDir;
+      try {
+        const entries = await readdir(destinationDir, { withFileTypes: true });
+        if (entries.length === 1 && entries[0].isDirectory()) {
+          finalDirectory = join(destinationDir, entries[0].name);
+        }
+      } catch {
+        // Keep destinationDir as fallback.
+      }
+      const id = directoryName;
       const installedSkill = {
         id,
-        name: directory,
+        name: directoryName,
         description: `Imported from ZIP: ${fileName}`,
-        directory,
+        directory: finalDirectory,
         apps: Object.fromEntries(APPS.map((app) => [app, app === currentApp])),
         installedAt: Date.now(),
         updatedAt: Date.now(),
@@ -705,6 +771,22 @@ async function route(req, res) {
       return sendJson(res, 200, enabled?.content || null);
     }
 
+    if (parts.length === 4 && parts[3] === "import" && req.method === "POST") {
+      const { fileName, content } = await readBody(req);
+      const id = `prompt-${Date.now()}`;
+      const name = String(fileName || "Imported Prompt").replace(/\.[^.]+$/, "");
+      state.prompts[app][id] = {
+        id,
+        name,
+        content: String(content || ""),
+        enabled: false,
+        createdAt: Math.floor(Date.now() / 1000),
+        updatedAt: Math.floor(Date.now() / 1000),
+      };
+      await saveState(state);
+      return sendJson(res, 200, id);
+    }
+
     const id = decodeURIComponent(parts[3] || "");
     if (parts.length === 4 && req.method === "PUT") {
       const { prompt } = await readBody(req);
@@ -725,6 +807,89 @@ async function route(req, res) {
         state.prompts[app][key].enabled = key === id;
       });
       await saveState(state);
+      return sendJson(res, 200, true);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "openclaw") {
+    const path = openclawConfigPath();
+    const config = await readJsonFileOr(path, {});
+    const defaults = config?.agents?.defaults ?? null;
+
+    if (parts[2] === "default-model" && req.method === "GET") {
+      return sendJson(res, 200, defaults?.model ?? null);
+    }
+    if (parts[2] === "agents-defaults" && req.method === "GET") {
+      return sendJson(res, 200, defaults);
+    }
+    if (parts[2] === "agents-defaults" && req.method === "PUT") {
+      const { defaults: nextDefaults } = await readBody(req);
+      config.agents = config.agents || {};
+      config.agents.defaults = nextDefaults;
+      await writeJsonAtomic(path, config);
+      return sendJson(res, 200, { warnings: [] });
+    }
+    if (parts[2] === "env" && req.method === "GET") {
+      return sendJson(res, 200, config.env || {});
+    }
+    if (parts[2] === "env" && req.method === "PUT") {
+      const { env } = await readBody(req);
+      config.env = env;
+      await writeJsonAtomic(path, config);
+      return sendJson(res, 200, { warnings: [] });
+    }
+    if (parts[2] === "tools" && req.method === "GET") {
+      return sendJson(res, 200, config.tools || {});
+    }
+    if (parts[2] === "tools" && req.method === "PUT") {
+      const { tools } = await readBody(req);
+      config.tools = tools;
+      await writeJsonAtomic(path, config);
+      return sendJson(res, 200, { warnings: [] });
+    }
+    if (parts[2] === "health" && req.method === "GET") {
+      return sendJson(res, 200, []);
+    }
+    if (parts[2] === "live-provider" && req.method === "GET") {
+      return sendJson(res, 200, config);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "hermes") {
+    const path = hermesConfigPath();
+    const config = await readJsonFileOr(path, {});
+    const memoryLimits = {
+      memory: config.memory?.budgets?.memory ?? 2200,
+      user: config.memory?.budgets?.user ?? 1375,
+      memoryEnabled: config.memory?.enabled?.memory ?? true,
+      userEnabled: config.memory?.enabled?.user ?? true,
+    };
+
+    if (parts[2] === "model-config" && req.method === "GET") {
+      return sendJson(res, 200, config.model ?? null);
+    }
+    if (parts[2] === "memory-limits" && req.method === "GET") {
+      return sendJson(res, 200, memoryLimits);
+    }
+    if (parts[2] === "memory" && parts[3] && req.method === "GET") {
+      const kind = parts[3];
+      const filePath = hermesMemoryPath(kind);
+      const content = existsSync(filePath) ? await readFile(filePath, "utf8") : "";
+      return sendJson(res, 200, content);
+    }
+    if (parts[2] === "memory" && parts[3] && req.method === "PUT") {
+      const kind = parts[3];
+      const { content } = await readBody(req);
+      await writeTextAtomic(hermesMemoryPath(kind), String(content || ""));
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "memory-enabled" && parts[3] && req.method === "PUT") {
+      const kind = parts[3];
+      const { enabled } = await readBody(req);
+      config.memory = config.memory || {};
+      config.memory.enabled = config.memory.enabled || {};
+      config.memory.enabled[kind] = Boolean(enabled);
+      await writeTextAtomic(path, `${JSON.stringify(config, null, 2)}\n`);
       return sendJson(res, 200, true);
     }
   }

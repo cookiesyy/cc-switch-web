@@ -8,6 +8,7 @@ import type {
   OpenClawHealthWarning,
   OpenClawWriteOutcome,
 } from "@/types";
+import { apiRequest, isTauriRuntime } from "./http";
 
 /**
  * OpenClaw configuration API
@@ -26,6 +27,9 @@ export const openclawApi = {
    * Get default model configuration (agents.defaults.model)
    */
   async getDefaultModel(): Promise<OpenClawDefaultModel | null> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/default-model");
+    }
     return await invoke("get_openclaw_default_model");
   },
 
@@ -35,6 +39,12 @@ export const openclawApi = {
   async setDefaultModel(
     model: OpenClawDefaultModel,
   ): Promise<OpenClawWriteOutcome> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/agents-defaults", {
+        method: "PUT",
+        body: JSON.stringify({ defaults: { model } }),
+      });
+    }
     return await invoke("set_openclaw_default_model", { model });
   },
 
@@ -61,6 +71,9 @@ export const openclawApi = {
    * Get full agents.defaults config (all fields)
    */
   async getAgentsDefaults(): Promise<OpenClawAgentsDefaults | null> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/agents-defaults");
+    }
     return await invoke("get_openclaw_agents_defaults");
   },
 
@@ -70,6 +83,12 @@ export const openclawApi = {
   async setAgentsDefaults(
     defaults: OpenClawAgentsDefaults,
   ): Promise<OpenClawWriteOutcome> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/agents-defaults", {
+        method: "PUT",
+        body: JSON.stringify({ defaults }),
+      });
+    }
     return await invoke("set_openclaw_agents_defaults", { defaults });
   },
 
@@ -81,6 +100,9 @@ export const openclawApi = {
    * Get env config (env section of openclaw.json)
    */
   async getEnv(): Promise<OpenClawEnvConfig> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/env");
+    }
     return await invoke("get_openclaw_env");
   },
 
@@ -88,6 +110,12 @@ export const openclawApi = {
    * Set env config (env section of openclaw.json)
    */
   async setEnv(env: OpenClawEnvConfig): Promise<OpenClawWriteOutcome> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/env", {
+        method: "PUT",
+        body: JSON.stringify({ env }),
+      });
+    }
     return await invoke("set_openclaw_env", { env });
   },
 
@@ -99,6 +127,9 @@ export const openclawApi = {
    * Get tools config (tools section of openclaw.json)
    */
   async getTools(): Promise<OpenClawToolsConfig> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/tools");
+    }
     return await invoke("get_openclaw_tools");
   },
 
@@ -106,16 +137,28 @@ export const openclawApi = {
    * Set tools config (tools section of openclaw.json)
    */
   async setTools(tools: OpenClawToolsConfig): Promise<OpenClawWriteOutcome> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/tools", {
+        method: "PUT",
+        body: JSON.stringify({ tools }),
+      });
+    }
     return await invoke("set_openclaw_tools", { tools });
   },
 
   async scanHealth(): Promise<OpenClawHealthWarning[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/health");
+    }
     return await invoke("scan_openclaw_config_health");
   },
 
   async getLiveProvider(
     providerId: string,
   ): Promise<Record<string, unknown> | null> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/live-provider");
+    }
     return await invoke("get_openclaw_live_provider", { providerId });
   },
 };
