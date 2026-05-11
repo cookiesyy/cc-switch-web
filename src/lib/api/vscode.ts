@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CustomEndpoint } from "@/types";
 import type { AppId } from "./types";
+import { apiRequest, isTauriRuntime } from "./http";
 
 export interface EndpointLatencyResult {
   url: string;
@@ -11,6 +12,9 @@ export interface EndpointLatencyResult {
 
 export const vscodeApi = {
   async getLiveProviderSettings(appId: AppId) {
+    if (!isTauriRuntime()) {
+      return {};
+    }
     return await invoke("read_live_provider_settings", { app: appId });
   },
 
@@ -18,6 +22,15 @@ export const vscodeApi = {
     urls: string[],
     options?: { timeoutSecs?: number },
   ): Promise<EndpointLatencyResult[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/endpoint-test", {
+        method: "POST",
+        body: JSON.stringify({
+          urls,
+          timeoutSecs: options?.timeoutSecs,
+        }),
+      });
+    }
     return await invoke("test_api_endpoints", {
       urls,
       timeoutSecs: options?.timeoutSecs,
@@ -28,6 +41,9 @@ export const vscodeApi = {
     appId: AppId,
     providerId: string,
   ): Promise<CustomEndpoint[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest(`/api/providers/${appId}/${encodeURIComponent(providerId)}/custom-endpoints`);
+    }
     return await invoke("get_custom_endpoints", {
       app: appId,
       providerId: providerId,
@@ -39,6 +55,13 @@ export const vscodeApi = {
     providerId: string,
     url: string,
   ): Promise<void> {
+    if (!isTauriRuntime()) {
+      await apiRequest(`/api/providers/${appId}/${encodeURIComponent(providerId)}/custom-endpoints`, {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      });
+      return;
+    }
     await invoke("add_custom_endpoint", {
       app: appId,
       providerId: providerId,
@@ -51,6 +74,12 @@ export const vscodeApi = {
     providerId: string,
     url: string,
   ): Promise<void> {
+    if (!isTauriRuntime()) {
+      await apiRequest(`/api/providers/${appId}/${encodeURIComponent(providerId)}/custom-endpoints/${encodeURIComponent(url)}`, {
+        method: "DELETE",
+      });
+      return;
+    }
     await invoke("remove_custom_endpoint", {
       app: appId,
       providerId: providerId,
@@ -63,6 +92,13 @@ export const vscodeApi = {
     providerId: string,
     url: string,
   ): Promise<void> {
+    if (!isTauriRuntime()) {
+      await apiRequest(`/api/providers/${appId}/${encodeURIComponent(providerId)}/custom-endpoints/last-used`, {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      });
+      return;
+    }
     await invoke("update_endpoint_last_used", {
       app: appId,
       providerId: providerId,

@@ -156,6 +156,21 @@ function assertApp(app) {
   if (!APPS.includes(app)) throw new Error(`Unsupported app: ${app}`);
 }
 
+function getProviderCustomEndpoints(provider) {
+  const map = provider?.meta?.custom_endpoints;
+  if (!map || typeof map !== "object") return [];
+  return Object.values(map)
+    .filter((item) => item && typeof item.url === "string")
+    .sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0) || a.url.localeCompare(b.url));
+}
+
+function setProviderCustomEndpoints(provider, endpoints) {
+  if (!provider.meta || typeof provider.meta !== "object") provider.meta = {};
+  provider.meta.custom_endpoints = Object.fromEntries(
+    endpoints.map((ep) => [ep.url, ep]),
+  );
+}
+
 function codexPaths() {
   return {
     dir: join(homedir(), ".codex"),
@@ -194,6 +209,32 @@ async function applyProviderToLive(app, provider) {
   }
 }
 
+async function testSingleEndpoint(url, timeoutSecs = 8) {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutSecs * 1000);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    return {
+      url,
+      latency: Date.now() - startedAt,
+      status: response.status,
+    };
+  } catch (error) {
+    clearTimeout(timer);
+    return {
+      url,
+      latency: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 async function route(req, res) {
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
 
@@ -229,6 +270,15 @@ async function route(req, res) {
       hermes: join(homedir(), ".hermes"),
     };
     return sendJson(res, 200, dirs[app]);
+  }
+
+  if (parts[0] === "api" && parts[1] === "endpoint-test" && req.method === "POST") {
+    const { urls, timeoutSecs } = await readBody(req);
+    if (!Array.isArray(urls)) throw new Error("urls must be an array");
+    const results = await Promise.all(
+      urls.map((url) => testSingleEndpoint(String(url), Number(timeoutSecs || 8))),
+    );
+    return sendJson(res, 200, results);
   }
 
   if (parts[0] === "api" && parts[1] === "providers") {
@@ -280,6 +330,58 @@ async function route(req, res) {
       await applyProviderToLive(app, provider);
       await saveState(state);
       return sendJson(res, 200, { warnings: [] });
+    }
+
+    if (parts.length === 5 && parts[4] === "custom-endpoints" && req.method === "GET") {
+      const provider = state.providers[app]?.[id];
+      if (!provider) throw new Error(`Provider not found: ${id}`);
+      return sendJson(res, 200, getProviderCustomEndpoints(provider));
+    }
+
+    if (parts.length === 5 && parts[4] === "live-settings" && req.method === "GET") {
+      const provider = state.providers[app]?.[id];
+      if (!provider) throw new Error(`Provider not found: ${id}`);
+      return sendJson(res, 200, provider.settingsConfig || {});
+    }
+
+    if (parts.length === 5 && parts[4] === "custom-endpoints" && req.method === "POST") {
+      const provider = state.providers[app]?.[id];
+      if (!provider) throw new Error(`Provider not found: ${id}`);
+      const body = await readBody(req);
+      const url = String(body.url || "").trim().replace(/\/+$/, "");
+      if (!url) throw new Error("url is required");
+      const endpoints = getProviderCustomEndpoints(provider);
+      if (!endpoints.some((item) => item.url === url)) {
+        endpoints.push({ url, addedAt: Date.now() });
+      }
+      setProviderCustomEndpoints(provider, endpoints);
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+
+    if (parts.length === 6 && parts[4] === "custom-endpoints" && req.method === "DELETE") {
+      const provider = state.providers[app]?.[id];
+      if (!provider) throw new Error(`Provider not found: ${id}`);
+      const targetUrl = decodeURIComponent(parts[5]);
+      const endpoints = getProviderCustomEndpoints(provider).filter(
+        (item) => item.url !== targetUrl,
+      );
+      setProviderCustomEndpoints(provider, endpoints);
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+
+    if (parts.length === 6 && parts[4] === "custom-endpoints" && parts[5] === "last-used" && req.method === "POST") {
+      const provider = state.providers[app]?.[id];
+      if (!provider) throw new Error(`Provider not found: ${id}`);
+      const body = await readBody(req);
+      const targetUrl = String(body.url || "").trim().replace(/\/+$/, "");
+      const endpoints = getProviderCustomEndpoints(provider).map((item) =>
+        item.url === targetUrl ? { ...item, lastUsed: Date.now() } : item,
+      );
+      setProviderCustomEndpoints(provider, endpoints);
+      await saveState(state);
+      return sendJson(res, 200, true);
     }
   }
 
