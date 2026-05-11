@@ -546,13 +546,16 @@ async function applyProviderToLive(app, provider) {
     if (settings && typeof settings === "object") {
       const existing = await readHermesYamlOr(hermesConfigPath(), {});
       const providerName = settings.name || provider.id;
+      const existingProviders = Array.isArray(existing.custom_providers)
+        ? existing.custom_providers
+        : [];
       const nextProvider = {
-        ...(providers.find((item) => item?.name === providerName) || {}),
+        ...(existingProviders.find((item) => item?.name === providerName) || {}),
         ...settings,
         name: providerName,
       };
-      const providers = Array.isArray(existing.custom_providers)
-        ? existing.custom_providers.filter((item) => item?.name !== providerName)
+      const providers = existingProviders
+        ? existingProviders.filter((item) => item?.name !== providerName)
         : [];
       providers.push(nextProvider);
       existing.custom_providers = providers;
