@@ -46,6 +46,7 @@ import { LogConfigPanel } from "@/components/settings/LogConfigPanel";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
 import { WebAuthTokenSettings } from "@/components/settings/WebAuthTokenSettings";
 import { WebModeNotice } from "@/components/settings/WebModeNotice";
+import { WebDevToolsPanel } from "@/components/settings/WebDevToolsPanel";
 import { useInstalledSkills } from "@/hooks/useSkills";
 import { useSettings } from "@/hooks/useSettings";
 import { useImportExport } from "@/hooks/useImportExport";
@@ -228,6 +229,7 @@ export function SettingsPage({
                     <ThemeSettings />
                     <WebModeNotice />
                     <WebAuthTokenSettings />
+                    <WebDevToolsPanel />
                     <AppVisibilitySettings
                       settings={settings}
                       onChange={handleAutoSave}

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { CodexIcon } from "@/components/BrandIcons";
 import { CopilotAuthSection } from "@/components/providers/forms/CopilotAuthSection";
 import { CodexOAuthSection } from "@/components/providers/forms/CodexOAuthSection";
+import { ManualAuthAccountPanel } from "@/components/settings/ManualAuthAccountPanel";
 
 export function AuthCenterPanel() {
   const { t } = useTranslation();
@@ -50,6 +51,7 @@ export function AuthCenterPanel() {
         </div>
 
         <CopilotAuthSection />
+        <ManualAuthAccountPanel provider="github_copilot" />
       </section>
 
       <section className="rounded-xl border border-border/60 bg-card/60 p-6">
@@ -68,6 +70,7 @@ export function AuthCenterPanel() {
         </div>
 
         <CodexOAuthSection />
+        <ManualAuthAccountPanel provider="codex_oauth" />
       </section>
     </div>
   );

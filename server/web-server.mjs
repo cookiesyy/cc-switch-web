@@ -1851,6 +1851,36 @@ async function route(req, res) {
   }
 
   if (parts[0] === "api" && parts[1] === "usage") {
+    if (parts[2] === "seed-demo" && req.method === "POST") {
+      const now = Math.floor(Date.now() / 1000);
+      const sample = {
+        requestId: `demo-${Date.now()}`,
+        providerId: "demo-provider",
+        providerName: "Demo Provider",
+        appType: "codex",
+        model: "gpt-5.4",
+        requestModel: "gpt-5.4",
+        costMultiplier: "1",
+        inputTokens: 1200,
+        outputTokens: 480,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        inputCostUsd: "0.012",
+        outputCostUsd: "0.024",
+        cacheReadCostUsd: "0",
+        cacheCreationCostUsd: "0",
+        totalCostUsd: "0.036",
+        isStreaming: true,
+        latencyMs: 820,
+        firstTokenMs: 240,
+        durationMs: 1700,
+        statusCode: 200,
+        createdAt: now,
+        dataSource: "web-demo",
+      };
+      upsertUsageRequestLog(sample);
+      return sendJson(res, 200, true);
+    }
     if (parts[2] === "request-log" && req.method === "POST") {
       const log = await readBody(req);
       if (!log?.requestId) throw new Error("requestId is required");
@@ -1861,19 +1891,100 @@ async function route(req, res) {
       return sendJson(res, 200, { success: false, error: "Usage query backend not implemented yet" });
     }
     if (parts[2] === "summary" && req.method === "GET") {
+      const rows = listUsageRequestLogs();
+      const totalRequests = rows.length;
+      const totalCost = rows
+        .reduce((sum, row) => sum + Number.parseFloat(row.totalCostUsd || "0"), 0)
+        .toFixed(6);
+      const totalInputTokens = rows.reduce((sum, row) => sum + (row.inputTokens || 0), 0);
+      const totalOutputTokens = rows.reduce((sum, row) => sum + (row.outputTokens || 0), 0);
+      const totalCacheCreationTokens = rows.reduce(
+        (sum, row) => sum + (row.cacheCreationTokens || 0),
+        0,
+      );
+      const totalCacheReadTokens = rows.reduce(
+        (sum, row) => sum + (row.cacheReadTokens || 0),
+        0,
+      );
+      const successCount = rows.filter((row) => Number(row.statusCode) < 400).length;
       return sendJson(res, 200, {
-        totalRequests: 0,
-        totalCost: "0",
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalCacheCreationTokens: 0,
-        totalCacheReadTokens: 0,
-        successRate: 0,
+        totalRequests,
+        totalCost,
+        totalInputTokens,
+        totalOutputTokens,
+        totalCacheCreationTokens,
+        totalCacheReadTokens,
+        successRate: totalRequests > 0 ? Math.round((successCount / totalRequests) * 100) : 0,
       });
     }
     if (parts[2] === "trends" && req.method === "GET") return sendJson(res, 200, []);
-    if (parts[2] === "provider-stats" && req.method === "GET") return sendJson(res, 200, []);
-    if (parts[2] === "model-stats" && req.method === "GET") return sendJson(res, 200, []);
+    if (parts[2] === "provider-stats" && req.method === "GET") {
+      const rows = listUsageRequestLogs();
+      const grouped = new Map();
+      for (const row of rows) {
+        const key = row.providerId;
+        const current = grouped.get(key) || {
+          providerId: row.providerId,
+          providerName: row.providerName || row.providerId,
+          requestCount: 0,
+          totalTokens: 0,
+          totalCost: 0,
+          successCount: 0,
+          latencyTotal: 0,
+        };
+        current.requestCount += 1;
+        current.totalTokens += (row.inputTokens || 0) + (row.outputTokens || 0);
+        current.totalCost += Number.parseFloat(row.totalCostUsd || "0");
+        current.successCount += Number(row.statusCode) < 400 ? 1 : 0;
+        current.latencyTotal += row.latencyMs || 0;
+        grouped.set(key, current);
+      }
+      return sendJson(
+        res,
+        200,
+        Array.from(grouped.values()).map((item) => ({
+          providerId: item.providerId,
+          providerName: item.providerName,
+          requestCount: item.requestCount,
+          totalTokens: item.totalTokens,
+          totalCost: item.totalCost.toFixed(6),
+          successRate: item.requestCount
+            ? Math.round((item.successCount / item.requestCount) * 100)
+            : 0,
+          avgLatencyMs: item.requestCount ? Math.round(item.latencyTotal / item.requestCount) : 0,
+        })),
+      );
+    }
+    if (parts[2] === "model-stats" && req.method === "GET") {
+      const rows = listUsageRequestLogs();
+      const grouped = new Map();
+      for (const row of rows) {
+        const key = row.model;
+        const current = grouped.get(key) || {
+          model: row.model,
+          requestCount: 0,
+          totalTokens: 0,
+          totalCost: 0,
+        };
+        current.requestCount += 1;
+        current.totalTokens += (row.inputTokens || 0) + (row.outputTokens || 0);
+        current.totalCost += Number.parseFloat(row.totalCostUsd || "0");
+        grouped.set(key, current);
+      }
+      return sendJson(
+        res,
+        200,
+        Array.from(grouped.values()).map((item) => ({
+          model: item.model,
+          requestCount: item.requestCount,
+          totalTokens: item.totalTokens,
+          totalCost: item.totalCost.toFixed(6),
+          avgCostPerRequest: item.requestCount
+            ? (item.totalCost / item.requestCount).toFixed(6)
+            : "0",
+        })),
+      );
+    }
     if (parts[2] === "request-logs" && req.method === "POST") {
       const { page = 0, pageSize = 20 } = await readBody(req);
       const rows = listUsageRequestLogs();
@@ -1914,6 +2025,25 @@ async function route(req, res) {
   }
 
   if (parts[0] === "api" && parts[1] === "sessions") {
+    if (parts[2] === "seed-demo" && req.method === "POST") {
+      const meta = {
+        providerId: "demo-provider",
+        sessionId: `session-${Date.now()}`,
+        title: "Demo Session",
+        summary: "Session generated from web demo tools",
+        projectDir: "/demo/project",
+        createdAt: Date.now(),
+        lastActiveAt: Date.now(),
+        sourcePath: `/demo/${Date.now()}.json`,
+        resumeCommand: "codex resume demo",
+      };
+      const messages = [
+        { role: "user", content: "Build a dashboard", ts: Date.now() - 60000 },
+        { role: "assistant", content: "Drafting the implementation plan.", ts: Date.now() - 30000 },
+      ];
+      upsertSession(meta, messages);
+      return sendJson(res, 200, true);
+    }
     if (parts[2] === "upsert" && req.method === "POST") {
       const { meta, messages } = await readBody(req);
       if (!meta?.providerId || !meta?.sessionId) throw new Error("session meta is incomplete");
