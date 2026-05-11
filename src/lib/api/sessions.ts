@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SessionMessage, SessionMeta } from "@/types";
-import { isTauriRuntime } from "./http";
+import { apiRequest, isTauriRuntime } from "./http";
 
 export interface DeleteSessionOptions {
   providerId: string;
@@ -15,7 +15,7 @@ export interface DeleteSessionResult extends DeleteSessionOptions {
 
 export const sessionsApi = {
   async list(): Promise<SessionMeta[]> {
-    if (!isTauriRuntime()) return [];
+    if (!isTauriRuntime()) return apiRequest("/api/sessions/list");
     return await invoke("list_sessions");
   },
 
@@ -23,12 +23,22 @@ export const sessionsApi = {
     providerId: string,
     sourcePath: string,
   ): Promise<SessionMessage[]> {
-    if (!isTauriRuntime()) return [];
+    if (!isTauriRuntime()) {
+      return apiRequest("/api/sessions/messages", {
+        method: "POST",
+        body: JSON.stringify({ providerId, sourcePath }),
+      });
+    }
     return await invoke("get_session_messages", { providerId, sourcePath });
   },
 
   async delete(options: DeleteSessionOptions): Promise<boolean> {
-    if (!isTauriRuntime()) return false;
+    if (!isTauriRuntime()) {
+      return apiRequest("/api/sessions/delete", {
+        method: "POST",
+        body: JSON.stringify(options),
+      });
+    }
     const { providerId, sessionId, sourcePath } = options;
     return await invoke("delete_session", {
       providerId,
@@ -40,7 +50,12 @@ export const sessionsApi = {
   async deleteMany(
     items: DeleteSessionOptions[],
   ): Promise<DeleteSessionResult[]> {
-    if (!isTauriRuntime()) return [];
+    if (!isTauriRuntime()) {
+      return apiRequest("/api/sessions/delete-many", {
+        method: "POST",
+        body: JSON.stringify({ items }),
+      });
+    }
     return await invoke("delete_sessions", { items });
   },
 

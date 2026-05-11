@@ -90,6 +90,81 @@ function getDb() {
       section TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS settings_store (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS providers_store (
+      app TEXT NOT NULL,
+      id TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY(app, id)
+    );
+    CREATE TABLE IF NOT EXISTS current_providers (
+      app TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mcp_store (
+      id TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS prompts_store (
+      app TEXT NOT NULL,
+      id TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY(app, id)
+    );
+    CREATE TABLE IF NOT EXISTS skills_store (
+      id TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS skill_repos_store (
+      owner TEXT NOT NULL,
+      name TEXT NOT NULL,
+      branch TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY(owner, name, branch)
+    );
+    CREATE TABLE IF NOT EXISTS skill_backups_store (
+      backup_id TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS omo_current_store (
+      kind TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS usage_model_pricing_store (
+      model_id TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sessions_store (
+      provider_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      source_path TEXT NOT NULL,
+      meta TEXT NOT NULL,
+      messages TEXT NOT NULL DEFAULT '[]',
+      PRIMARY KEY(provider_id, session_id, source_path)
+    );
+    CREATE TABLE IF NOT EXISTS failover_queue_store (
+      app_type TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY(app_type, provider_id)
+    );
+    CREATE TABLE IF NOT EXISTS failover_settings_store (
+      app_type TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS auth_accounts_store (
+      provider TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY(provider, account_id)
+    );
+    CREATE TABLE IF NOT EXISTS auth_default_store (
+      provider TEXT PRIMARY KEY,
+      account_id TEXT
+    );
   `);
   return db;
 }
@@ -129,11 +204,277 @@ function readSectionsSync() {
   );
 }
 
+function clearDomainTablesSync() {
+  const database = getDb();
+  database.exec(`
+    DELETE FROM settings_store;
+    DELETE FROM providers_store;
+    DELETE FROM current_providers;
+    DELETE FROM mcp_store;
+    DELETE FROM prompts_store;
+    DELETE FROM skills_store;
+    DELETE FROM skill_repos_store;
+    DELETE FROM skill_backups_store;
+    DELETE FROM omo_current_store;
+  `);
+}
+
+function writeDomainStateSync(state) {
+  const database = getDb();
+  database.exec("BEGIN");
+  try {
+    clearDomainTablesSync();
+
+    database
+      .prepare("INSERT INTO settings_store(key, value) VALUES(?, ?)")
+      .run("root", JSON.stringify(state.settings ?? defaultState().settings));
+
+    const providerStmt = database.prepare(
+      "INSERT INTO providers_store(app, id, value) VALUES(?, ?, ?)",
+    );
+    for (const app of APPS) {
+      for (const [id, provider] of Object.entries(state.providers?.[app] || {})) {
+        providerStmt.run(app, id, JSON.stringify(provider));
+      }
+    }
+
+    const currentStmt = database.prepare(
+      "INSERT INTO current_providers(app, provider_id) VALUES(?, ?)",
+    );
+    for (const [app, providerId] of Object.entries(state.current || {})) {
+      if (providerId) currentStmt.run(app, String(providerId));
+    }
+
+    const mcpStmt = database.prepare(
+      "INSERT INTO mcp_store(id, value) VALUES(?, ?)",
+    );
+    for (const [id, server] of Object.entries(state.mcp || {})) {
+      mcpStmt.run(id, JSON.stringify(server));
+    }
+
+    const promptStmt = database.prepare(
+      "INSERT INTO prompts_store(app, id, value) VALUES(?, ?, ?)",
+    );
+    for (const app of APPS) {
+      for (const [id, prompt] of Object.entries(state.prompts?.[app] || {})) {
+        promptStmt.run(app, id, JSON.stringify(prompt));
+      }
+    }
+
+    const skillStmt = database.prepare(
+      "INSERT INTO skills_store(id, value) VALUES(?, ?)",
+    );
+    for (const [id, skill] of Object.entries(state.skills || {})) {
+      skillStmt.run(id, JSON.stringify(skill));
+    }
+
+    const repoStmt = database.prepare(
+      "INSERT INTO skill_repos_store(owner, name, branch, value) VALUES(?, ?, ?, ?)",
+    );
+    for (const repo of state.skillRepos || []) {
+      repoStmt.run(repo.owner, repo.name, repo.branch || "main", JSON.stringify(repo));
+    }
+
+    const backupStmt = database.prepare(
+      "INSERT INTO skill_backups_store(backup_id, value) VALUES(?, ?)",
+    );
+    for (const backup of state.skillBackups || []) {
+      backupStmt.run(backup.backupId, JSON.stringify(backup));
+    }
+
+    const omoStmt = database.prepare(
+      "INSERT INTO omo_current_store(kind, provider_id) VALUES(?, ?)",
+    );
+    for (const [kind, providerId] of Object.entries(state.omoCurrent || {})) {
+      if (providerId) omoStmt.run(kind, String(providerId));
+    }
+
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function readDomainStateSync() {
+  const database = getDb();
+  const state = defaultState();
+
+  const settingsRow = database
+    .prepare("SELECT value FROM settings_store WHERE key = ?")
+    .get("root");
+  if (settingsRow?.value) state.settings = JSON.parse(settingsRow.value);
+
+  const providerRows = database
+    .prepare("SELECT app, id, value FROM providers_store")
+    .all();
+  for (const row of providerRows) {
+    state.providers[row.app] ||= {};
+    state.providers[row.app][row.id] = JSON.parse(row.value);
+  }
+
+  const currentRows = database
+    .prepare("SELECT app, provider_id FROM current_providers")
+    .all();
+  for (const row of currentRows) {
+    state.current[row.app] = row.provider_id;
+  }
+
+  const mcpRows = database.prepare("SELECT id, value FROM mcp_store").all();
+  for (const row of mcpRows) {
+    state.mcp[row.id] = JSON.parse(row.value);
+  }
+
+  const promptRows = database
+    .prepare("SELECT app, id, value FROM prompts_store")
+    .all();
+  for (const row of promptRows) {
+    state.prompts[row.app] ||= {};
+    state.prompts[row.app][row.id] = JSON.parse(row.value);
+  }
+
+  const skillRows = database.prepare("SELECT id, value FROM skills_store").all();
+  for (const row of skillRows) {
+    state.skills[row.id] = JSON.parse(row.value);
+  }
+
+  const repoRows = database
+    .prepare("SELECT value FROM skill_repos_store ORDER BY owner, name, branch")
+    .all();
+  state.skillRepos = repoRows.map((row) => JSON.parse(row.value));
+
+  const backupRows = database
+    .prepare("SELECT value FROM skill_backups_store ORDER BY backup_id DESC")
+    .all();
+  state.skillBackups = backupRows.map((row) => JSON.parse(row.value));
+
+  const omoRows = database
+    .prepare("SELECT kind, provider_id FROM omo_current_store")
+    .all();
+  for (const row of omoRows) {
+    state.omoCurrent[row.kind] = row.provider_id;
+  }
+
+  return state;
+}
+
+function getUsageModelPricing() {
+  const rows = getDb()
+    .prepare("SELECT value FROM usage_model_pricing_store ORDER BY model_id")
+    .all();
+  return rows.map((row) => JSON.parse(row.value));
+}
+
+function saveUsageModelPricing(pricing) {
+  const database = getDb();
+  database.exec("BEGIN");
+  try {
+    const stmt = database.prepare(`
+      INSERT INTO usage_model_pricing_store(model_id, value)
+      VALUES(?, ?)
+      ON CONFLICT(model_id) DO UPDATE SET value = excluded.value
+    `);
+    stmt.run(pricing.modelId, JSON.stringify(pricing));
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function deleteUsageModelPricing(modelId) {
+  getDb().prepare("DELETE FROM usage_model_pricing_store WHERE model_id = ?").run(modelId);
+}
+
+function listSessions() {
+  return getDb()
+    .prepare("SELECT meta FROM sessions_store ORDER BY provider_id, session_id")
+    .all()
+    .map((row) => JSON.parse(row.meta));
+}
+
+function getSessionMessages(providerId, sourcePath) {
+  const row = getDb()
+    .prepare(
+      "SELECT messages FROM sessions_store WHERE provider_id = ? AND source_path = ? LIMIT 1",
+    )
+    .get(providerId, sourcePath);
+  return row?.messages ? JSON.parse(row.messages) : [];
+}
+
+function deleteSession(providerId, sessionId, sourcePath) {
+  getDb()
+    .prepare(
+      "DELETE FROM sessions_store WHERE provider_id = ? AND session_id = ? AND source_path = ?",
+    )
+    .run(providerId, sessionId, sourcePath);
+}
+
+function getFailoverQueue(appType) {
+  return getDb()
+    .prepare("SELECT value FROM failover_queue_store WHERE app_type = ? ORDER BY provider_id")
+    .all(appType)
+    .map((row) => JSON.parse(row.value));
+}
+
+function setFailoverQueueItem(appType, providerId, value) {
+  getDb()
+    .prepare(`
+      INSERT INTO failover_queue_store(app_type, provider_id, value)
+      VALUES(?, ?, ?)
+      ON CONFLICT(app_type, provider_id) DO UPDATE SET value = excluded.value
+    `)
+    .run(appType, providerId, JSON.stringify(value));
+}
+
+function removeFailoverQueueItem(appType, providerId) {
+  getDb()
+    .prepare("DELETE FROM failover_queue_store WHERE app_type = ? AND provider_id = ?")
+    .run(appType, providerId);
+}
+
+function getFailoverEnabled(appType) {
+  const row = getDb()
+    .prepare("SELECT enabled FROM failover_settings_store WHERE app_type = ? LIMIT 1")
+    .get(appType);
+  return Boolean(row?.enabled);
+}
+
+function setFailoverEnabled(appType, enabled) {
+  getDb()
+    .prepare(`
+      INSERT INTO failover_settings_store(app_type, enabled)
+      VALUES(?, ?)
+      ON CONFLICT(app_type) DO UPDATE SET enabled = excluded.enabled
+    `)
+    .run(appType, enabled ? 1 : 0);
+}
+
+function getAuthStatus(provider) {
+  const rows = getDb()
+    .prepare("SELECT value FROM auth_accounts_store WHERE provider = ? ORDER BY account_id")
+    .all(provider);
+  const defaultRow = getDb()
+    .prepare("SELECT account_id FROM auth_default_store WHERE provider = ? LIMIT 1")
+    .get(provider);
+  const accounts = rows.map((row) => JSON.parse(row.value));
+  return {
+    provider,
+    authenticated: accounts.length > 0,
+    default_account_id: defaultRow?.account_id || null,
+    accounts,
+  };
+}
+
 async function migrateStateJsonToDbIfNeeded() {
-  if (countSections() > 0) return;
+  const database = getDb();
+  const providerCount = Number(
+    database.prepare("SELECT COUNT(*) AS count FROM providers_store").get()?.count || 0,
+  );
+  if (providerCount > 0 || countSections() > 0) return;
   const legacyState = await readJson(STATE_PATH, null);
   if (!legacyState) return;
-  writeSectionsSync({
+  writeDomainStateSync({
     settings: legacyState.settings ?? defaultState().settings,
     providers: legacyState.providers ?? defaultState().providers,
     current: legacyState.current ?? defaultState().current,
@@ -148,7 +489,7 @@ async function migrateStateJsonToDbIfNeeded() {
 
 async function loadState() {
   await migrateStateJsonToDbIfNeeded();
-  const state = countSections() > 0 ? readSectionsSync() : defaultState();
+  const state = readDomainStateSync();
   return {
     ...defaultState(),
     ...state,
@@ -164,7 +505,7 @@ async function loadState() {
 }
 
 async function saveState(state) {
-  writeSectionsSync({
+  writeDomainStateSync({
     settings: state.settings,
     providers: state.providers,
     current: state.current,
@@ -1450,6 +1791,188 @@ async function route(req, res) {
         (item) => !(item.owner === owner && item.name === name),
       );
       await saveState(state);
+      return sendJson(res, 200, true);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "usage") {
+    if (parts[2] === "query" && req.method === "POST") {
+      return sendJson(res, 200, { success: false, error: "Usage query backend not implemented yet" });
+    }
+    if (parts[2] === "summary" && req.method === "GET") {
+      return sendJson(res, 200, {
+        totalRequests: 0,
+        totalCost: "0",
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheCreationTokens: 0,
+        totalCacheReadTokens: 0,
+        successRate: 0,
+      });
+    }
+    if (parts[2] === "trends" && req.method === "GET") return sendJson(res, 200, []);
+    if (parts[2] === "provider-stats" && req.method === "GET") return sendJson(res, 200, []);
+    if (parts[2] === "model-stats" && req.method === "GET") return sendJson(res, 200, []);
+    if (parts[2] === "request-logs" && req.method === "POST") {
+      const { page = 0, pageSize = 20 } = await readBody(req);
+      return sendJson(res, 200, { data: [], total: 0, page, pageSize });
+    }
+    if (parts[2] === "request-detail" && parts[3] && req.method === "GET") {
+      return sendJson(res, 200, null);
+    }
+    if (parts[2] === "model-pricing" && req.method === "GET") {
+      return sendJson(res, 200, getUsageModelPricing());
+    }
+    if (parts[2] === "model-pricing" && req.method === "POST") {
+      const pricing = await readBody(req);
+      saveUsageModelPricing(pricing);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "model-pricing" && parts[3] && req.method === "DELETE") {
+      deleteUsageModelPricing(decodeURIComponent(parts[3]));
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "provider-limit" && req.method === "GET") {
+      const providerId = url.searchParams.get("providerId") || "";
+      return sendJson(res, 200, {
+        providerId,
+        dailyUsage: "0",
+        dailyExceeded: false,
+        monthlyUsage: "0",
+        monthlyExceeded: false,
+      });
+    }
+    if (parts[2] === "session-sync" && req.method === "POST") {
+      return sendJson(res, 200, { imported: 0, skipped: 0, filesScanned: 0, errors: [] });
+    }
+    if (parts[2] === "data-sources" && req.method === "GET") {
+      return sendJson(res, 200, []);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "sessions") {
+    if (parts[2] === "list" && req.method === "GET") {
+      return sendJson(res, 200, listSessions());
+    }
+    if (parts[2] === "messages" && req.method === "POST") {
+      const { providerId, sourcePath } = await readBody(req);
+      return sendJson(res, 200, getSessionMessages(providerId, sourcePath));
+    }
+    if (parts[2] === "delete" && req.method === "POST") {
+      const { providerId, sessionId, sourcePath } = await readBody(req);
+      deleteSession(providerId, sessionId, sourcePath);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "delete-many" && req.method === "POST") {
+      const { items } = await readBody(req);
+      const results = [];
+      for (const item of items || []) {
+        deleteSession(item.providerId, item.sessionId, item.sourcePath);
+        results.push({ ...item, success: true });
+      }
+      return sendJson(res, 200, results);
+    }
+    if (parts[2] === "launch-terminal" && req.method === "POST") {
+      return sendJson(res, 200, false);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "failover") {
+    if (parts[2] === "health" && req.method === "GET") {
+      const providerId = url.searchParams.get("providerId") || "";
+      const appType = url.searchParams.get("appType") || "";
+      return sendJson(res, 200, {
+        provider_id: providerId,
+        app_type: appType,
+        is_healthy: true,
+        consecutive_failures: 0,
+        last_success_at: null,
+        last_failure_at: null,
+        last_error: null,
+        updated_at: new Date().toISOString(),
+      });
+    }
+    if (parts[2] === "reset-circuit" && req.method === "POST") return sendJson(res, 200, true);
+    if (parts[2] === "circuit-config" && req.method === "GET") {
+      return sendJson(res, 200, {
+        failureThreshold: 5,
+        successThreshold: 2,
+        timeoutSeconds: 60,
+        errorRateThreshold: 0.5,
+        minRequests: 10,
+      });
+    }
+    if (parts[2] === "circuit-config" && req.method === "PUT") return sendJson(res, 200, true);
+    if (parts[2] === "circuit-stats" && req.method === "GET") return sendJson(res, 200, null);
+    if (parts[2] === "queue" && req.method === "GET") {
+      const appType = url.searchParams.get("appType") || "";
+      return sendJson(res, 200, getFailoverQueue(appType));
+    }
+    if (parts[2] === "available-providers" && req.method === "GET") {
+      const appType = url.searchParams.get("appType") || "";
+      const queued = new Set(getFailoverQueue(appType).map((item) => item.providerId));
+      const providers = Object.values((await loadState()).providers?.[appType] || {}).filter(
+        (provider) => !queued.has(provider.id),
+      );
+      return sendJson(res, 200, providers);
+    }
+    if (parts[2] === "queue" && req.method === "POST") {
+      const { appType, providerId } = await readBody(req);
+      const provider = (await loadState()).providers?.[appType]?.[providerId];
+      if (!provider) throw new Error(`Provider not found: ${providerId}`);
+      setFailoverQueueItem(appType, providerId, {
+        providerId,
+        providerName: provider.name,
+        providerNotes: provider.notes,
+        sortIndex: provider.sortIndex,
+      });
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "queue" && req.method === "DELETE") {
+      const { appType, providerId } = await readBody(req);
+      removeFailoverQueueItem(appType, providerId);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "enabled" && req.method === "GET") {
+      const appType = url.searchParams.get("appType") || "";
+      return sendJson(res, 200, getFailoverEnabled(appType));
+    }
+    if (parts[2] === "enabled" && req.method === "PUT") {
+      const { appType, enabled } = await readBody(req);
+      setFailoverEnabled(appType, Boolean(enabled));
+      return sendJson(res, 200, true);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "auth") {
+    const provider = parts[2];
+    if (parts[3] === "status" && req.method === "GET") {
+      return sendJson(res, 200, getAuthStatus(provider));
+    }
+    if (parts[3] === "accounts" && req.method === "GET") {
+      return sendJson(res, 200, getAuthStatus(provider).accounts);
+    }
+    if (parts[3] === "logout" && req.method === "POST") {
+      getDb().prepare("DELETE FROM auth_accounts_store WHERE provider = ?").run(provider);
+      getDb().prepare("DELETE FROM auth_default_store WHERE provider = ?").run(provider);
+      return sendJson(res, 200, true);
+    }
+    if (parts[3] === "accounts" && parts[4] && req.method === "DELETE") {
+      const accountId = decodeURIComponent(parts[4]);
+      getDb()
+        .prepare("DELETE FROM auth_accounts_store WHERE provider = ? AND account_id = ?")
+        .run(provider, accountId);
+      return sendJson(res, 200, true);
+    }
+    if (parts[3] === "default-account" && req.method === "PUT") {
+      const { accountId } = await readBody(req);
+      getDb()
+        .prepare(`
+          INSERT INTO auth_default_store(provider, account_id)
+          VALUES(?, ?)
+          ON CONFLICT(provider) DO UPDATE SET account_id = excluded.account_id
+        `)
+        .run(provider, accountId);
       return sendJson(res, 200, true);
     }
   }
