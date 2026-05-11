@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
+import { apiRequest, isTauriRuntime } from "./http";
 
 export interface FetchedModel {
   id: string;
@@ -19,6 +20,17 @@ export async function fetchModelsForConfig(
   isFullUrl?: boolean,
   modelsUrl?: string,
 ): Promise<FetchedModel[]> {
+  if (!isTauriRuntime()) {
+    return apiRequest("/api/models/fetch", {
+      method: "POST",
+      body: JSON.stringify({
+        baseUrl,
+        apiKey,
+        isFullUrl,
+        modelsUrl,
+      }),
+    });
+  }
   return invoke("fetch_models_for_config", {
     baseUrl,
     apiKey,

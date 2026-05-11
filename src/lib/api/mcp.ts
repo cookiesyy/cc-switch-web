@@ -7,6 +7,7 @@ import type {
   McpStatus,
 } from "@/types";
 import type { AppId } from "./types";
+import { apiRequest, isTauriRuntime } from "./http";
 
 export const mcpApi = {
   async getStatus(): Promise<McpStatus> {
@@ -29,6 +30,12 @@ export const mcpApi = {
   },
 
   async validateCommand(cmd: string): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/mcp/validate-command", {
+        method: "POST",
+        body: JSON.stringify({ cmd }),
+      });
+    }
     return await invoke("validate_mcp_command", { cmd });
   },
 
@@ -92,6 +99,9 @@ export const mcpApi = {
    * 获取所有 MCP 服务器（统一结构）
    */
   async getAllServers(): Promise<McpServersMap> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/mcp/servers");
+    }
     return await invoke("get_mcp_servers");
   },
 
@@ -99,6 +109,13 @@ export const mcpApi = {
    * 添加或更新 MCP 服务器（统一结构）
    */
   async upsertUnifiedServer(server: McpServer): Promise<void> {
+    if (!isTauriRuntime()) {
+      await apiRequest("/api/mcp/servers", {
+        method: "POST",
+        body: JSON.stringify({ server }),
+      });
+      return;
+    }
     return await invoke("upsert_mcp_server", { server });
   },
 
@@ -106,6 +123,11 @@ export const mcpApi = {
    * 删除 MCP 服务器
    */
   async deleteUnifiedServer(id: string): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return await apiRequest(`/api/mcp/servers/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    }
     return await invoke("delete_mcp_server", { id });
   },
 
@@ -117,6 +139,13 @@ export const mcpApi = {
     app: AppId,
     enabled: boolean,
   ): Promise<void> {
+    if (!isTauriRuntime()) {
+      await apiRequest("/api/mcp/toggle-app", {
+        method: "POST",
+        body: JSON.stringify({ serverId, app, enabled }),
+      });
+      return;
+    }
     return await invoke("toggle_mcp_app", { serverId, app, enabled });
   },
 
@@ -124,6 +153,11 @@ export const mcpApi = {
    * 从所有应用导入 MCP 服务器
    */
   async importFromApps(): Promise<number> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/mcp/import-from-apps", {
+        method: "POST",
+      });
+    }
     return await invoke("import_mcp_from_apps");
   },
 };

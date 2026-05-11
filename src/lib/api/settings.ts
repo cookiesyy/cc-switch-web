@@ -112,11 +112,34 @@ export const settingsApi = {
   },
 
   async exportConfigToFile(filePath: string): Promise<ConfigTransferResult> {
+    if (!isTauriRuntime()) {
+      throw new Error("exportConfigToFile is not available in web mode");
+    }
     return await invoke("export_config_to_file", { filePath });
   },
 
   async importConfigFromFile(filePath: string): Promise<ConfigTransferResult> {
+    if (!isTauriRuntime()) {
+      throw new Error("importConfigFromFile is not available in web mode");
+    }
     return await invoke("import_config_from_file", { filePath });
+  },
+
+  async exportConfigData(): Promise<unknown> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/config/export");
+    }
+    throw new Error("exportConfigData is only implemented for web mode");
+  },
+
+  async importConfigData(data: unknown): Promise<ConfigTransferResult> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/config/import", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    }
+    throw new Error("importConfigData is only implemented for web mode");
   },
 
   // ─── WebDAV sync ──────────────────────────────────────────

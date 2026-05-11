@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { settingsApi } from "@/lib/api";
 import { syncCurrentProvidersLiveSafe } from "@/utils/postChangeSync";
+import { isTauriRuntime } from "@/lib/api/http";
 
 export type ImportStatus =
   | "idle"
@@ -35,6 +36,9 @@ export function useImportExport(
   const { onImportSuccess } = options;
 
   const [selectedFile, setSelectedFile] = useState("");
+  const [selectedFileContent, setSelectedFileContent] = useState<string | null>(
+    null,
+  );
   const [status, setStatus] = useState<ImportStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [backupId, setBackupId] = useState<string | null>(null);
@@ -42,6 +46,7 @@ export function useImportExport(
 
   const clearSelection = useCallback(() => {
     setSelectedFile("");
+    setSelectedFileContent(null);
     setStatus("idle");
     setErrorMessage(null);
     setBackupId(null);
@@ -49,9 +54,25 @@ export function useImportExport(
 
   const selectImportFile = useCallback(async () => {
     try {
+      if (!isTauriRuntime()) {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json,application/json";
+        input.onchange = async () => {
+          const file = input.files?.[0];
+          if (!file) return;
+          setSelectedFile(file.name);
+          setSelectedFileContent(await file.text());
+          setStatus("idle");
+          setErrorMessage(null);
+        };
+        input.click();
+        return;
+      }
       const filePath = await settingsApi.openFileDialog();
       if (filePath) {
         setSelectedFile(filePath);
+        setSelectedFileContent(null);
         setStatus("idle");
         setErrorMessage(null);
       }
@@ -140,11 +161,84 @@ export function useImportExport(
     }
   }, [isImporting, onImportSuccess, selectedFile, t]);
 
+  const importConfigWeb = useCallback(async () => {
+    if (!selectedFileContent) {
+      toast.error(
+        t("settings.selectFileFailed", {
+          defaultValue: "请选择有效的配置文件",
+        }),
+      );
+      return;
+    }
+
+    if (isImporting) return;
+
+    setIsImporting(true);
+    setStatus("importing");
+    setErrorMessage(null);
+
+    try {
+      const data = JSON.parse(selectedFileContent);
+      const result = await settingsApi.importConfigData(data);
+      if (!result.success) {
+        setStatus("error");
+        setErrorMessage(result.message || t("settings.importFailed"));
+        return;
+      }
+
+      setBackupId(result.backupId ?? null);
+      void onImportSuccess?.();
+
+      const syncResult = await syncCurrentProvidersLiveSafe();
+      setStatus(syncResult.ok ? "success" : "partial-success");
+      toast.success(
+        syncResult.ok
+          ? t("settings.importSuccess", { defaultValue: "配置导入成功" })
+          : t("settings.importPartialSuccess", {
+              defaultValue: "配置已导入，部分 live 同步未完成",
+            }),
+        { closeButton: true },
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "");
+      setStatus("error");
+      setErrorMessage(message);
+      toast.error(
+        t("settings.importFailedError", {
+          defaultValue: "导入配置失败: {{message}}",
+          message,
+        }),
+      );
+    } finally {
+      setIsImporting(false);
+    }
+  }, [isImporting, onImportSuccess, selectedFileContent, t]);
+
   const exportConfig = useCallback(async () => {
     try {
       const now = new Date();
       const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
-      const defaultName = `cc-switch-export-${stamp}.sql`;
+      const defaultName = `cc-switch-export-${stamp}.${isTauriRuntime() ? "sql" : "json"}`;
+      if (!isTauriRuntime()) {
+        const data = await settingsApi.exportConfigData();
+        const blob = new Blob([JSON.stringify(data, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = defaultName;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success(
+          t("settings.configExported", {
+            defaultValue: "配置已导出",
+          }),
+          { closeButton: true },
+        );
+        return;
+      }
       const destination = await settingsApi.saveFileDialog(defaultName);
       if (!destination) {
         toast.error(
@@ -196,7 +290,7 @@ export function useImportExport(
     isImporting,
     selectImportFile,
     clearSelection,
-    importConfig,
+    importConfig: isTauriRuntime() ? importConfig : importConfigWeb,
     exportConfig,
     resetStatus,
   };

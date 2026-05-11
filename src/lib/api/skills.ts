@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { apiRequest, isTauriRuntime } from "./http";
 
 import type { AppId } from "@/lib/api/types";
 
@@ -138,16 +139,25 @@ export const skillsApi = {
 
   /** 获取所有已安装的 Skills */
   async getInstalled(): Promise<InstalledSkill[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/installed");
+    }
     return await invoke("get_installed_skills");
   },
 
   /** 获取可恢复的 Skill 备份列表 */
   async getBackups(): Promise<SkillBackupEntry[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/backups");
+    }
     return await invoke("get_skill_backups");
   },
 
   /** 删除 Skill 备份 */
   async deleteBackup(backupId: string): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return false;
+    }
     return await invoke("delete_skill_backup", { backupId });
   },
 
@@ -156,11 +166,23 @@ export const skillsApi = {
     skill: DiscoverableSkill,
     currentApp: AppId,
   ): Promise<InstalledSkill> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/install", {
+        method: "POST",
+        body: JSON.stringify({ skill, currentApp }),
+      });
+    }
     return await invoke("install_skill_unified", { skill, currentApp });
   },
 
   /** 卸载 Skill（统一卸载） */
   async uninstallUnified(id: string): Promise<SkillUninstallResult> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/uninstall", {
+        method: "POST",
+        body: JSON.stringify({ id }),
+      });
+    }
     return await invoke("uninstall_skill_unified", { id });
   },
 
@@ -169,16 +191,28 @@ export const skillsApi = {
     backupId: string,
     currentApp: AppId,
   ): Promise<InstalledSkill> {
+    if (!isTauriRuntime()) {
+      throw new Error("Skill backup restore is not implemented in web mode");
+    }
     return await invoke("restore_skill_backup", { backupId, currentApp });
   },
 
   /** 切换 Skill 的应用启用状态 */
   async toggleApp(id: string, app: AppId, enabled: boolean): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/toggle-app", {
+        method: "POST",
+        body: JSON.stringify({ id, app, enabled }),
+      });
+    }
     return await invoke("toggle_skill_app", { id, app, enabled });
   },
 
   /** 扫描未管理的 Skills */
   async scanUnmanaged(): Promise<UnmanagedSkill[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/scan-unmanaged");
+    }
     return await invoke("scan_unmanaged_skills");
   },
 
@@ -186,21 +220,39 @@ export const skillsApi = {
   async importFromApps(
     imports: ImportSkillSelection[],
   ): Promise<InstalledSkill[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/import-from-apps", {
+        method: "POST",
+        body: JSON.stringify({ imports }),
+      });
+    }
     return await invoke("import_skills_from_apps", { imports });
   },
 
   /** 发现可安装的 Skills（从仓库获取） */
   async discoverAvailable(): Promise<DiscoverableSkill[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/discover");
+    }
     return await invoke("discover_available_skills");
   },
 
   /** 检查 Skills 更新 */
   async checkUpdates(): Promise<SkillUpdateInfo[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/check-updates");
+    }
     return await invoke("check_skill_updates");
   },
 
   /** 更新单个 Skill */
   async updateSkill(id: string): Promise<InstalledSkill> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/update", {
+        method: "POST",
+        body: JSON.stringify({ id }),
+      });
+    }
     return await invoke("update_skill", { id });
   },
 
@@ -243,6 +295,12 @@ export const skillsApi = {
     directory: string,
     app: AppId = "claude",
   ): Promise<SkillUninstallResult> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/uninstall", {
+        method: "POST",
+        body: JSON.stringify({ id: directory, app }),
+      });
+    }
     if (app === "claude") {
       return await invoke("uninstall_skill", { directory });
     }
@@ -253,16 +311,31 @@ export const skillsApi = {
 
   /** 获取仓库列表 */
   async getRepos(): Promise<SkillRepo[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/repos");
+    }
     return await invoke("get_skill_repos");
   },
 
   /** 添加仓库 */
   async addRepo(repo: SkillRepo): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/skills/repos", {
+        method: "POST",
+        body: JSON.stringify({ repo }),
+      });
+    }
     return await invoke("add_skill_repo", { repo });
   },
 
   /** 删除仓库 */
   async removeRepo(owner: string, name: string): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return await apiRequest(
+        `/api/skills/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+        { method: "DELETE" },
+      );
+    }
     return await invoke("remove_skill_repo", { owner, name });
   },
 
@@ -270,6 +343,9 @@ export const skillsApi = {
 
   /** 打开 ZIP 文件选择对话框 */
   async openZipFileDialog(): Promise<string | null> {
+    if (!isTauriRuntime()) {
+      return null;
+    }
     return await invoke("open_zip_file_dialog");
   },
 

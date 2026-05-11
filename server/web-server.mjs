@@ -29,6 +29,10 @@ const defaultState = () => ({
   },
   providers: Object.fromEntries(APPS.map((app) => [app, {}])),
   current: Object.fromEntries(APPS.map((app) => [app, ""])),
+  mcp: {},
+  skills: {},
+  skillRepos: [],
+  prompts: Object.fromEntries(APPS.map((app) => [app, {}])),
 });
 
 async function ensureDir(path) {
@@ -64,6 +68,10 @@ async function loadState() {
     ...state,
     providers: { ...defaultState().providers, ...(state.providers || {}) },
     current: { ...defaultState().current, ...(state.current || {}) },
+    mcp: { ...defaultState().mcp, ...(state.mcp || {}) },
+    skills: { ...defaultState().skills, ...(state.skills || {}) },
+    prompts: { ...defaultState().prompts, ...(state.prompts || {}) },
+    skillRepos: Array.isArray(state.skillRepos) ? state.skillRepos : [],
   };
 }
 
@@ -235,6 +243,64 @@ async function testSingleEndpoint(url, timeoutSecs = 8) {
   }
 }
 
+async function fetchModelsForConfig({
+  baseUrl,
+  apiKey,
+  isFullUrl,
+  modelsUrl,
+}) {
+  const trim = (value) => String(value || "").trim().replace(/\/+$/, "");
+  const normalizedBase = trim(baseUrl);
+  const candidates = [];
+
+  if (modelsUrl) {
+    candidates.push(trim(modelsUrl));
+  } else if (normalizedBase) {
+    const baseWithoutV1 = normalizedBase.replace(/\/v1$/, "");
+    candidates.push(
+      isFullUrl ? normalizedBase : `${normalizedBase}/models`,
+      isFullUrl ? normalizedBase : `${baseWithoutV1}/v1/models`,
+    );
+
+    if (normalizedBase.endsWith("/anthropic")) {
+      const root = normalizedBase.replace(/\/anthropic$/, "");
+      candidates.push(`${root}/models`, `${root}/v1/models`);
+    }
+  }
+
+  const unique = [...new Set(candidates.filter(Boolean))];
+  if (unique.length === 0) throw new Error("Base URL is required");
+
+  let lastError = "No model endpoint succeeded";
+  for (const url of unique) {
+    try {
+      const response = await fetch(url, {
+        headers: apiKey
+          ? {
+              Authorization: `Bearer ${apiKey}`,
+            }
+          : {},
+      });
+      if (!response.ok) {
+        lastError = `HTTP ${response.status} @ ${url}`;
+        continue;
+      }
+      const json = await response.json();
+      const data = Array.isArray(json?.data) ? json.data : [];
+      return data
+        .filter((item) => item && typeof item.id === "string")
+        .map((item) => ({
+          id: item.id,
+          ownedBy: item.owned_by ?? item.ownedBy ?? null,
+        }));
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  throw new Error(`All candidates failed: ${lastError}`);
+}
+
 async function route(req, res) {
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
 
@@ -255,6 +321,33 @@ async function route(req, res) {
     state.settings = { ...state.settings, ...(await readBody(req)) };
     await saveState(state);
     return sendJson(res, 200, true);
+  }
+
+  if (url.pathname === "/api/config/export" && req.method === "GET") {
+    return sendJson(res, 200, state);
+  }
+
+  if (url.pathname === "/api/config/import" && req.method === "POST") {
+    const body = await readBody(req);
+    await saveState({
+      ...defaultState(),
+      ...body,
+      providers: { ...defaultState().providers, ...(body.providers || {}) },
+      current: { ...defaultState().current, ...(body.current || {}) },
+      mcp: body.mcp || {},
+      skills: body.skills || {},
+      prompts: { ...defaultState().prompts, ...(body.prompts || {}) },
+      skillRepos: Array.isArray(body.skillRepos) ? body.skillRepos : [],
+    });
+    return sendJson(res, 200, {
+      success: true,
+      message: "Imported",
+      backupId: null,
+    });
+  }
+
+  if (url.pathname === "/api/models/fetch" && req.method === "POST") {
+    return sendJson(res, 200, await fetchModelsForConfig(await readBody(req)));
   }
 
   if (parts[0] === "api" && parts[1] === "config-dir" && req.method === "GET") {
@@ -380,6 +473,135 @@ async function route(req, res) {
         item.url === targetUrl ? { ...item, lastUsed: Date.now() } : item,
       );
       setProviderCustomEndpoints(provider, endpoints);
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "mcp") {
+    if (parts[2] === "servers" && req.method === "GET") {
+      return sendJson(res, 200, state.mcp || {});
+    }
+    if (parts[2] === "servers" && req.method === "POST") {
+      const body = await readBody(req);
+      const server = body.server ?? body;
+      if (!server?.id) throw new Error("server.id is required");
+      state.mcp[server.id] = server;
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "servers" && parts[3] && req.method === "DELETE") {
+      delete state.mcp[decodeURIComponent(parts[3])];
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "toggle-app" && req.method === "POST") {
+      const { serverId, app, enabled } = await readBody(req);
+      assertApp(app);
+      const server = state.mcp?.[serverId];
+      if (!server) throw new Error(`MCP server not found: ${serverId}`);
+      server.apps = server.apps || {};
+      server.apps[app] = Boolean(enabled);
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "import-from-apps" && req.method === "POST") {
+      return sendJson(res, 200, 0);
+    }
+    if (parts[2] === "validate-command" && req.method === "POST") {
+      const { cmd } = await readBody(req);
+      return sendJson(res, 200, Boolean(String(cmd || "").trim()));
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "skills") {
+    if (parts[2] === "installed" && req.method === "GET") {
+      return sendJson(res, 200, Object.values(state.skills || {}));
+    }
+    if (parts[2] === "backups" && req.method === "GET") {
+      return sendJson(res, 200, []);
+    }
+    if (parts[2] === "install" && req.method === "POST") {
+      const { skill, currentApp } = await readBody(req);
+      if (!skill?.directory) throw new Error("skill.directory is required");
+      const id = skill.id || skill.directory;
+      const installedSkill = {
+        id,
+        name: skill.name || id,
+        description: skill.description || "",
+        directory: skill.directory,
+        repoOwner: skill.repoOwner,
+        repoName: skill.repoName,
+        repoBranch: skill.repoBranch,
+        readmeUrl: skill.readmeUrl,
+        apps: Object.fromEntries(APPS.map((app) => [app, app === currentApp])),
+        installedAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      state.skills[id] = installedSkill;
+      await saveState(state);
+      return sendJson(res, 200, installedSkill);
+    }
+    if (parts[2] === "toggle-app" && req.method === "POST") {
+      const { id, app, enabled } = await readBody(req);
+      assertApp(app);
+      const skill = state.skills?.[id];
+      if (!skill) throw new Error(`Skill not found: ${id}`);
+      skill.apps = skill.apps || {};
+      skill.apps[app] = Boolean(enabled);
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "uninstall" && req.method === "POST") {
+      const { id } = await readBody(req);
+      delete state.skills[id];
+      await saveState(state);
+      return sendJson(res, 200, {});
+    }
+    if (parts[2] === "restore-backup" && req.method === "POST") {
+      throw new Error("Skill backup restore is not implemented in web mode");
+    }
+    if (parts[2] === "scan-unmanaged" && req.method === "GET") {
+      return sendJson(res, 200, []);
+    }
+    if (parts[2] === "import-from-apps" && req.method === "POST") {
+      return sendJson(res, 200, []);
+    }
+    if (parts[2] === "discover" && req.method === "GET") {
+      return sendJson(res, 200, []);
+    }
+    if (parts[2] === "check-updates" && req.method === "GET") {
+      return sendJson(res, 200, []);
+    }
+    if (parts[2] === "update" && req.method === "POST") {
+      const { id } = await readBody(req);
+      const skill = state.skills?.[id];
+      if (!skill) throw new Error(`Skill not found: ${id}`);
+      skill.updatedAt = Date.now();
+      await saveState(state);
+      return sendJson(res, 200, skill);
+    }
+    if (parts[2] === "repos" && req.method === "GET") {
+      return sendJson(res, 200, state.skillRepos || []);
+    }
+    if (parts[2] === "repos" && req.method === "POST") {
+      const { repo } = await readBody(req);
+      if (!repo?.owner || !repo?.name) throw new Error("repo owner/name required");
+      state.skillRepos = [
+        ...(state.skillRepos || []).filter(
+          (item) => !(item.owner === repo.owner && item.name === repo.name),
+        ),
+        repo,
+      ];
+      await saveState(state);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "repos" && parts[3] && parts[4] && req.method === "DELETE") {
+      const owner = decodeURIComponent(parts[3]);
+      const name = decodeURIComponent(parts[4]);
+      state.skillRepos = (state.skillRepos || []).filter(
+        (item) => !(item.owner === owner && item.name === name),
+      );
       await saveState(state);
       return sendJson(res, 200, true);
     }
