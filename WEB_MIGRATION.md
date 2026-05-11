@@ -49,7 +49,7 @@ The Rust Axum server prototype is kept at `src-tauri/src/bin/server.rs`, but it 
 
 ## Server Environment
 
-- `CC_SWITCH_WEB_HOST`: default `127.0.0.1`
+- `CC_SWITCH_WEB_HOST`: default `0.0.0.0`
 - `CC_SWITCH_WEB_PORT`: default `15730`
 - `CC_SWITCH_WEB_DATA_DIR`: default `~/.cc-switch-web`
 

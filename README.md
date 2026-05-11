@@ -137,14 +137,14 @@ If your CLI tools run under a non-root Linux user, mount that user's config dire
 ## Environment Variables
 
 ```bash
-CC_SWITCH_WEB_HOST=127.0.0.1
+CC_SWITCH_WEB_HOST=0.0.0.0
 CC_SWITCH_WEB_PORT=15730
 CC_SWITCH_WEB_DATA_DIR=~/.cc-switch-web
 ```
 
 Defaults:
 
-- `CC_SWITCH_WEB_HOST`: `127.0.0.1`
+- `CC_SWITCH_WEB_HOST`: `0.0.0.0`
 - `CC_SWITCH_WEB_PORT`: `15730`
 - `CC_SWITCH_WEB_DATA_DIR`: `~/.cc-switch-web`
 

@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { homedir } from "node:os";
 
-const HOST = process.env.CC_SWITCH_WEB_HOST || "127.0.0.1";
+const HOST = process.env.CC_SWITCH_WEB_HOST || "0.0.0.0";
 const PORT = Number(process.env.CC_SWITCH_WEB_PORT || 15730);
 const DATA_DIR = process.env.CC_SWITCH_WEB_DATA_DIR || join(homedir(), ".cc-switch-web");
 const STATE_PATH = join(DATA_DIR, "state.json");
