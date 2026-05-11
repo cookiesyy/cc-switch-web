@@ -15,6 +15,8 @@ ENV CC_SWITCH_WEB_HOST=0.0.0.0
 ENV CC_SWITCH_WEB_PORT=3000
 ENV CC_SWITCH_WEB_DATA_DIR=/data
 ENV CC_SWITCH_WEB_STATIC_DIR=/app/dist
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./package.json
 COPY --from=build /app/dist ./dist
 COPY server ./server
 EXPOSE 3000
