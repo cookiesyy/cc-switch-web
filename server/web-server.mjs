@@ -253,6 +253,25 @@ function hermesMemoryPath(kind) {
   return join(hermesMemoriesDir(), kind === "user" ? "USER.md" : "MEMORY.md");
 }
 
+function promptFilePath(app) {
+  switch (app) {
+    case "claude":
+      return join(homedir(), ".claude", "CLAUDE.md");
+    case "codex":
+      return join(homedir(), ".codex", "AGENTS.md");
+    case "gemini":
+      return join(homedir(), ".gemini", "GEMINI.md");
+    case "opencode":
+      return join(homedir(), ".config", "opencode", "AGENTS.md");
+    case "openclaw":
+      return join(homedir(), ".openclaw", "AGENTS.md");
+    case "hermes":
+      return join(homedir(), ".hermes", "AGENTS.md");
+    default:
+      throw new Error(`Prompts unsupported for app: ${app}`);
+  }
+}
+
 async function readJsonFileOr(path, fallback) {
   if (!existsSync(path)) return fallback;
   try {
@@ -310,6 +329,33 @@ async function syncSkillEverywhere(skill) {
   for (const app of APPS) {
     await syncSkillToApp(skill, app, Boolean(apps[app]));
   }
+}
+
+async function syncEnabledPromptToFile(state, app) {
+  const prompts = state.prompts?.[app] || {};
+  const enabledPrompt = Object.values(prompts).find((prompt) => prompt.enabled);
+  const path = promptFilePath(app);
+  await ensureDir(dirname(path));
+  await writeTextAtomic(path, enabledPrompt ? String(enabledPrompt.content || "") : "");
+}
+
+async function scanSkillsFromAppDir(app) {
+  const root = skillTargetDir(app);
+  if (!existsSync(root)) return [];
+  const entries = await readdir(root, { withFileTypes: true });
+  const results = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const dir = join(root, entry.name);
+    results.push({
+      directory: entry.name,
+      name: entry.name,
+      path: dir,
+      foundIn: [app],
+      description: undefined,
+    });
+  }
+  return results;
 }
 
 async function extractZipToDir(buffer, destinationDir) {
@@ -390,7 +436,10 @@ async function applyProviderToLive(app, provider) {
         provider: {},
       });
       existing.provider = existing.provider || {};
-      existing.provider[provider.id] = settings;
+      existing.provider[provider.id] = {
+        ...(existing.provider[provider.id] || {}),
+        ...settings,
+      };
       await backupExistingFile(opencodeConfigPath());
       await writeJsonAtomic(opencodeConfigPath(), existing);
     }
@@ -406,7 +455,10 @@ async function applyProviderToLive(app, provider) {
       existing.models = existing.models || {};
       existing.models.mode = existing.models.mode || "merge";
       existing.models.providers = existing.models.providers || {};
-      existing.models.providers[provider.id] = settings;
+      existing.models.providers[provider.id] = {
+        ...(existing.models.providers[provider.id] || {}),
+        ...settings,
+      };
       await backupExistingFile(openclawConfigPath());
       await writeJsonAtomic(openclawConfigPath(), existing);
     }
@@ -419,6 +471,7 @@ async function applyProviderToLive(app, provider) {
       const existing = await readHermesYamlOr(hermesConfigPath(), {});
       const providerName = settings.name || provider.id;
       const nextProvider = {
+        ...(providers.find((item) => item?.name === providerName) || {}),
         ...settings,
         name: providerName,
       };
@@ -897,10 +950,48 @@ async function route(req, res) {
       throw new Error("Skill backup restore is not implemented in web mode");
     }
     if (parts[2] === "scan-unmanaged" && req.method === "GET") {
-      return sendJson(res, 200, []);
+      const grouped = new Map();
+      for (const app of APPS) {
+        const items = await scanSkillsFromAppDir(app);
+        for (const item of items) {
+          const existing = grouped.get(item.directory);
+          if (existing) {
+            existing.foundIn = [...new Set([...existing.foundIn, ...item.foundIn])];
+          } else {
+            grouped.set(item.directory, item);
+          }
+        }
+      }
+      return sendJson(res, 200, Array.from(grouped.values()));
     }
     if (parts[2] === "import-from-apps" && req.method === "POST") {
-      return sendJson(res, 200, []);
+      const { imports } = await readBody(req);
+      const installed = [];
+      for (const item of imports || []) {
+        const source = APPS.map((app) => ({
+          app,
+          path: join(skillTargetDir(app), item.directory),
+        })).find(({ path }) => existsSync(path));
+        if (!source) continue;
+        const destinationDir = join(DATA_DIR, "skills", item.directory);
+        await rm(destinationDir, { recursive: true, force: true });
+        await ensureDir(dirname(destinationDir));
+        await cp(source.path, destinationDir, { recursive: true });
+        const skill = {
+          id: item.directory,
+          name: item.directory,
+          description: "Imported from app skills directory",
+          directory: destinationDir,
+          apps: item.apps,
+          installedAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        state.skills[skill.id] = skill;
+        await syncSkillEverywhere(skill);
+        installed.push(skill);
+      }
+      await saveState(state);
+      return sendJson(res, 200, installed);
     }
     if (parts[2] === "discover" && req.method === "GET") {
       return sendJson(res, 200, []);
@@ -977,12 +1068,16 @@ async function route(req, res) {
       const { prompt } = await readBody(req);
       if (!prompt?.id) throw new Error("prompt.id is required");
       state.prompts[app][id] = prompt;
+      if (prompt.enabled) {
+        await syncEnabledPromptToFile(state, app);
+      }
       await saveState(state);
       return sendJson(res, 200, true);
     }
 
     if (parts.length === 4 && req.method === "DELETE") {
       delete state.prompts[app][id];
+      await syncEnabledPromptToFile(state, app);
       await saveState(state);
       return sendJson(res, 200, true);
     }
@@ -991,6 +1086,7 @@ async function route(req, res) {
       Object.keys(state.prompts[app] || {}).forEach((key) => {
         state.prompts[app][key].enabled = key === id;
       });
+      await syncEnabledPromptToFile(state, app);
       await saveState(state);
       return sendJson(res, 200, true);
     }
@@ -1029,6 +1125,17 @@ async function route(req, res) {
     if (parts[2] === "tools" && req.method === "PUT") {
       const { tools } = await readBody(req);
       config.tools = tools;
+      await writeJsonAtomic(path, config);
+      return sendJson(res, 200, { warnings: [] });
+    }
+    if (parts[2] === "model-catalog" && req.method === "GET") {
+      return sendJson(res, 200, defaults?.models || null);
+    }
+    if (parts[2] === "model-catalog" && req.method === "PUT") {
+      const { catalog } = await readBody(req);
+      config.agents = config.agents || {};
+      config.agents.defaults = config.agents.defaults || {};
+      config.agents.defaults.models = catalog;
       await writeJsonAtomic(path, config);
       return sendJson(res, 200, { warnings: [] });
     }

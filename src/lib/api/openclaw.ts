@@ -55,6 +55,9 @@ export const openclawApi = {
     string,
     OpenClawModelCatalogEntry
   > | null> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/model-catalog");
+    }
     return await invoke("get_openclaw_model_catalog");
   },
 
@@ -64,6 +67,12 @@ export const openclawApi = {
   async setModelCatalog(
     catalog: Record<string, OpenClawModelCatalogEntry>,
   ): Promise<OpenClawWriteOutcome> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/openclaw/model-catalog", {
+        method: "PUT",
+        body: JSON.stringify({ catalog }),
+      });
+    }
     return await invoke("set_openclaw_model_catalog", { catalog });
   },
 
