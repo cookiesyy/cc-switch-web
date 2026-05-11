@@ -72,7 +72,10 @@ export function useProxyStatus() {
 
   // 启动服务器（总开关：仅启动服务，不接管）
   const startProxyServerMutation = useMutation({
-    mutationFn: () => invoke<ProxyServerInfo>("start_proxy_server"),
+    mutationFn: () =>
+      isTauriRuntime()
+        ? invoke<ProxyServerInfo>("start_proxy_server")
+        : Promise.reject(new Error("Proxy is not available in web mode")),
     onSuccess: (info) => {
       toast.success(
         t("proxy.server.started", {
@@ -99,7 +102,10 @@ export function useProxyStatus() {
 
   // 停止服务器（仅停止服务，不改写/恢复其它应用接管状态）
   const stopProxyServerMutation = useMutation({
-    mutationFn: () => invoke("stop_proxy_server"),
+    mutationFn: () =>
+      isTauriRuntime()
+        ? invoke("stop_proxy_server")
+        : Promise.resolve(),
     onSuccess: () => {
       toast.success(
         t("proxy.server.stopped", {
@@ -124,7 +130,10 @@ export function useProxyStatus() {
 
   // 停止服务器（总开关关闭：强制恢复所有已接管的 Live 配置）
   const stopWithRestoreMutation = useMutation({
-    mutationFn: () => invoke("stop_proxy_with_restore"),
+    mutationFn: () =>
+      isTauriRuntime()
+        ? invoke("stop_proxy_with_restore")
+        : Promise.resolve(),
     onSuccess: () => {
       toast.success(
         t("proxy.stoppedWithRestore", {
@@ -156,7 +165,9 @@ export function useProxyStatus() {
   // 按应用开启/关闭接管
   const setTakeoverForAppMutation = useMutation({
     mutationFn: ({ appType, enabled }: { appType: string; enabled: boolean }) =>
-      invoke("set_proxy_takeover_for_app", { appType, enabled }),
+      isTauriRuntime()
+        ? invoke("set_proxy_takeover_for_app", { appType, enabled })
+        : Promise.resolve(),
     onSuccess: (_data, variables) => {
       const appLabel =
         variables.appType === "claude"
@@ -204,7 +215,10 @@ export function useProxyStatus() {
     }: {
       appType: string;
       providerId: string;
-    }) => invoke("switch_proxy_provider", { appType, providerId }),
+    }) =>
+      isTauriRuntime()
+        ? invoke("switch_proxy_provider", { appType, providerId })
+        : Promise.reject(new Error("Proxy is not available in web mode")),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
     },

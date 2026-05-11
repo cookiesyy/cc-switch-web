@@ -118,6 +118,24 @@ cp .env.example .env
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
+Production-style deployment with automatic HTTPS via Caddy:
+
+```bash
+cp .env.example .env
+# edit:
+# CC_SWITCH_WEB_DOMAIN
+# CC_SWITCH_WEB_AUTH_TOKEN
+# CC_SWITCH_WEB_BASIC_AUTH_USER
+# CC_SWITCH_WEB_BASIC_AUTH_HASH
+docker compose -f docker-compose.caddy.yml up -d --build
+```
+
+Generate a Caddy password hash:
+
+```bash
+docker run --rm caddy:2.8-alpine caddy hash-password --plaintext 'your-password'
+```
+
 The container serves both the Web UI and `/api` from one Node.js process.
 
 Default container environment:

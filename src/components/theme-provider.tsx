@@ -46,7 +46,7 @@ export function ThemeProvider({
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !isTauriRuntime()) {
+    if (typeof window === "undefined") {
       return;
     }
 
@@ -106,6 +106,7 @@ export function ThemeProvider({
 
     const updateNativeTheme = async (nativeTheme: string) => {
       if (isCancelled) return;
+      if (!isTauriRuntime()) return;
       try {
         await invoke("set_window_theme", { theme: nativeTheme });
       } catch (e) {
