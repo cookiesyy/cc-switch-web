@@ -169,6 +169,18 @@ function getDb() {
       provider TEXT PRIMARY KEY,
       account_id TEXT
     );
+    CREATE TABLE IF NOT EXISTS config_snippets_store (
+      app_type TEXT PRIMARY KEY,
+      snippet TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS universal_providers_store (
+      id TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS claude_desktop_store (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -509,6 +521,99 @@ function getAuthStatus(provider) {
     default_account_id: defaultRow?.account_id || null,
     accounts,
   };
+}
+
+function getConfigSnippet(appType) {
+  const row = getDb()
+    .prepare("SELECT snippet FROM config_snippets_store WHERE app_type = ? LIMIT 1")
+    .get(appType);
+  return row?.snippet ?? null;
+}
+
+function setConfigSnippet(appType, snippet) {
+  getDb()
+    .prepare(`
+      INSERT INTO config_snippets_store(app_type, snippet)
+      VALUES(?, ?)
+      ON CONFLICT(app_type) DO UPDATE SET snippet = excluded.snippet
+    `)
+    .run(appType, snippet ?? "");
+}
+
+function getUniversalProviders() {
+  const rows = getDb()
+    .prepare("SELECT id, value FROM universal_providers_store ORDER BY id")
+    .all();
+  return Object.fromEntries(rows.map((row) => [row.id, JSON.parse(row.value)]));
+}
+
+function getUniversalProvider(id) {
+  const row = getDb()
+    .prepare("SELECT value FROM universal_providers_store WHERE id = ? LIMIT 1")
+    .get(id);
+  return row?.value ? JSON.parse(row.value) : null;
+}
+
+function upsertUniversalProvider(provider) {
+  getDb()
+    .prepare(`
+      INSERT INTO universal_providers_store(id, value)
+      VALUES(?, ?)
+      ON CONFLICT(id) DO UPDATE SET value = excluded.value
+    `)
+    .run(provider.id, JSON.stringify(provider));
+}
+
+function deleteUniversalProvider(id) {
+  getDb().prepare("DELETE FROM universal_providers_store WHERE id = ?").run(id);
+}
+
+function getClaudeDesktopStatus() {
+  const row = getDb()
+    .prepare("SELECT value FROM claude_desktop_store WHERE key = 'status' LIMIT 1")
+    .get();
+  return row?.value
+    ? JSON.parse(row.value)
+    : {
+        supported: true,
+        configured: false,
+        proxyRunning: false,
+        staleRawModels: false,
+        missingRouteMappings: false,
+        gatewayTokenConfigured: false,
+      };
+}
+
+function setClaudeDesktopStatus(status) {
+  getDb()
+    .prepare(`
+      INSERT INTO claude_desktop_store(key, value)
+      VALUES('status', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `)
+    .run(JSON.stringify(status));
+}
+
+function getClaudeDesktopRoutes() {
+  const row = getDb()
+    .prepare("SELECT value FROM claude_desktop_store WHERE key = 'routes' LIMIT 1")
+    .get();
+  return row?.value
+    ? JSON.parse(row.value)
+    : [
+        {
+          routeId: "claude-sonnet-4-6",
+          envKey: "ANTHROPIC_MODEL",
+          displayName: "Sonnet",
+          supports1m: false,
+        },
+        {
+          routeId: "claude-opus-4-7",
+          envKey: "ANTHROPIC_MODEL",
+          displayName: "Opus",
+          supports1m: false,
+        },
+      ];
 }
 
 function upsertAuthAccount(provider, account) {
@@ -1339,6 +1444,68 @@ async function route(req, res) {
 
   if (url.pathname === "/api/models/fetch" && req.method === "POST") {
     return sendJson(res, 200, await fetchModelsForConfig(await readBody(req)));
+  }
+
+  if (parts[0] === "api" && parts[1] === "config-snippet") {
+    const appType = parts[2];
+    if (req.method === "GET") {
+      return sendJson(res, 200, getConfigSnippet(appType));
+    }
+    if (req.method === "PUT") {
+      const { snippet } = await readBody(req);
+      setConfigSnippet(appType, String(snippet || ""));
+      return sendJson(res, 200, true);
+    }
+    if (parts[3] === "extract" && req.method === "POST") {
+      const { settingsConfig } = await readBody(req);
+      if (typeof settingsConfig !== "string" || !settingsConfig.trim()) {
+        return sendJson(res, 200, "");
+      }
+      try {
+        const parsed = JSON.parse(settingsConfig);
+        if (parsed?.env && typeof parsed.env === "object") {
+          return sendJson(res, 200, JSON.stringify(parsed.env, null, 2));
+        }
+        return sendJson(res, 200, JSON.stringify(parsed, null, 2));
+      } catch {
+        return sendJson(res, 200, settingsConfig);
+      }
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "universal-providers") {
+    if (parts.length === 2 && req.method === "GET") {
+      return sendJson(res, 200, getUniversalProviders());
+    }
+    if (parts.length === 3 && req.method === "GET") {
+      return sendJson(res, 200, getUniversalProvider(decodeURIComponent(parts[2])));
+    }
+    if (parts.length === 2 && req.method === "POST") {
+      const { provider } = await readBody(req);
+      upsertUniversalProvider(provider);
+      return sendJson(res, 200, true);
+    }
+    if (parts.length === 3 && req.method === "DELETE") {
+      deleteUniversalProvider(decodeURIComponent(parts[2]));
+      return sendJson(res, 200, true);
+    }
+    if (parts.length === 4 && parts[3] === "sync" && req.method === "POST") {
+      const provider = getUniversalProvider(decodeURIComponent(parts[2]));
+      if (!provider) throw new Error("Universal provider not found");
+      return sendJson(res, 200, true);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "claude-desktop") {
+    if (parts[2] === "status" && req.method === "GET") {
+      return sendJson(res, 200, getClaudeDesktopStatus());
+    }
+    if (parts[2] === "default-routes" && req.method === "GET") {
+      return sendJson(res, 200, getClaudeDesktopRoutes());
+    }
+    if (parts[2] === "import-from-claude" && req.method === "POST") {
+      return sendJson(res, 200, 0);
+    }
   }
 
   if (parts[0] === "api" && parts[1] === "config-dir" && req.method === "GET") {

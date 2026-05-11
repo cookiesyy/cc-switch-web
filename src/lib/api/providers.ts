@@ -256,6 +256,9 @@ export const universalProvidersApi = {
    * 获取所有统一供应商
    */
   async getAll(): Promise<UniversalProvidersMap> {
+    if (!isTauriRuntime()) {
+      return apiRequest("/api/universal-providers");
+    }
     return await invoke("get_universal_providers");
   },
 
@@ -263,6 +266,9 @@ export const universalProvidersApi = {
    * 获取单个统一供应商
    */
   async get(id: string): Promise<UniversalProvider | null> {
+    if (!isTauriRuntime()) {
+      return apiRequest(`/api/universal-providers/${encodeURIComponent(id)}`);
+    }
     return await invoke("get_universal_provider", { id });
   },
 
@@ -270,6 +276,12 @@ export const universalProvidersApi = {
    * 添加或更新统一供应商
    */
   async upsert(provider: UniversalProvider): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return apiRequest("/api/universal-providers", {
+        method: "POST",
+        body: JSON.stringify({ provider }),
+      });
+    }
     return await invoke("upsert_universal_provider", { provider });
   },
 
@@ -277,6 +289,11 @@ export const universalProvidersApi = {
    * 删除统一供应商
    */
   async delete(id: string): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return apiRequest(`/api/universal-providers/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    }
     return await invoke("delete_universal_provider", { id });
   },
 
@@ -284,6 +301,11 @@ export const universalProvidersApi = {
    * 手动同步统一供应商到各应用
    */
   async sync(id: string): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return apiRequest(`/api/universal-providers/${encodeURIComponent(id)}/sync`, {
+        method: "POST",
+      });
+    }
     return await invoke("sync_universal_provider", { id });
   },
 };

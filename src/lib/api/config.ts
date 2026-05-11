@@ -1,5 +1,6 @@
 // 配置相关 API
 import { invoke } from "@tauri-apps/api/core";
+import { apiRequest, isTauriRuntime } from "./http";
 
 export type AppType = "claude" | "codex" | "gemini" | "omo" | "omo_slim";
 
@@ -9,6 +10,9 @@ export type AppType = "claude" | "codex" | "gemini" | "omo" | "omo_slim";
  * @deprecated 使用 getCommonConfigSnippet('claude') 替代
  */
 export async function getClaudeCommonConfigSnippet(): Promise<string | null> {
+  if (!isTauriRuntime()) {
+    return apiRequest("/api/config-snippet/claude");
+  }
   return invoke<string | null>("get_claude_common_config_snippet");
 }
 
@@ -21,6 +25,13 @@ export async function getClaudeCommonConfigSnippet(): Promise<string | null> {
 export async function setClaudeCommonConfigSnippet(
   snippet: string,
 ): Promise<void> {
+  if (!isTauriRuntime()) {
+    await apiRequest("/api/config-snippet/claude", {
+      method: "PUT",
+      body: JSON.stringify({ snippet }),
+    });
+    return;
+  }
   return invoke("set_claude_common_config_snippet", { snippet });
 }
 
@@ -32,6 +43,9 @@ export async function setClaudeCommonConfigSnippet(
 export async function getCommonConfigSnippet(
   appType: AppType,
 ): Promise<string | null> {
+  if (!isTauriRuntime()) {
+    return apiRequest(`/api/config-snippet/${appType}`);
+  }
   return invoke<string | null>("get_common_config_snippet", { appType });
 }
 
@@ -45,6 +59,13 @@ export async function setCommonConfigSnippet(
   appType: AppType,
   snippet: string,
 ): Promise<void> {
+  if (!isTauriRuntime()) {
+    await apiRequest(`/api/config-snippet/${appType}`, {
+      method: "PUT",
+      body: JSON.stringify({ snippet }),
+    });
+    return;
+  }
   return invoke("set_common_config_snippet", { appType, snippet });
 }
 
@@ -71,6 +92,13 @@ export async function extractCommonConfigSnippet(
 
   if (typeof settingsConfig === "string" && settingsConfig.trim()) {
     args.settingsConfig = settingsConfig;
+  }
+
+  if (!isTauriRuntime()) {
+    return apiRequest(`/api/config-snippet/${appType}/extract`, {
+      method: "POST",
+      body: JSON.stringify(args),
+    });
   }
 
   return invoke<string>("extract_common_config_snippet", args);
