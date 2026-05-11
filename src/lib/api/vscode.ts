@@ -13,7 +13,7 @@ export interface EndpointLatencyResult {
 export const vscodeApi = {
   async getLiveProviderSettings(appId: AppId) {
     if (!isTauriRuntime()) {
-      return {};
+      return await apiRequest(`/api/live-provider-settings/${appId}`);
     }
     return await invoke("read_live_provider_settings", { app: appId });
   },

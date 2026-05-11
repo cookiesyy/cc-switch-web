@@ -152,6 +152,10 @@ export const providersApi = {
     updates: ProviderSortUpdate[],
     appId: AppId,
   ): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      console.warn(`updateSortOrder is not implemented in web mode for ${appId}`);
+      return false;
+    }
     return await invoke("update_providers_sort_order", { updates, app: appId });
   },
 
@@ -174,6 +178,9 @@ export const providersApi = {
     appId: AppId,
     options?: OpenTerminalOptions,
   ): Promise<boolean> {
+    if (!isTauriRuntime()) {
+      return false;
+    }
     const { cwd } = options ?? {};
     return await invoke("open_provider_terminal", {
       providerId,
@@ -195,6 +202,9 @@ export const providersApi = {
    * 用于前端判断供应商是否已添加到 opencode.json
    */
   async getOpenCodeLiveProviderIds(): Promise<string[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/live-provider-ids/opencode");
+    }
     return await invoke("get_opencode_live_provider_ids");
   },
 
@@ -203,6 +213,9 @@ export const providersApi = {
    * 用于前端判断供应商是否已添加到 openclaw.json
    */
   async getOpenClawLiveProviderIds(): Promise<string[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/live-provider-ids/openclaw");
+    }
     return await invoke("get_openclaw_live_provider_ids");
   },
 
@@ -211,6 +224,9 @@ export const providersApi = {
    * 用于前端判断供应商是否已添加到 Hermes 配置
    */
   async getHermesLiveProviderIds(): Promise<string[]> {
+    if (!isTauriRuntime()) {
+      return await apiRequest("/api/live-provider-ids/hermes");
+    }
     return await invoke("get_hermes_live_provider_ids");
   },
 

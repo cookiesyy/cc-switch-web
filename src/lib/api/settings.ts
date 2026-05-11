@@ -189,6 +189,10 @@ export const settingsApi = {
   },
 
   async openExternal(url: string): Promise<void> {
+    if (!isTauriRuntime()) {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
     try {
       const u = new URL(url);
       const scheme = u.protocol.replace(":", "").toLowerCase();

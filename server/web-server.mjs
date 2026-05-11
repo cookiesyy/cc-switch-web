@@ -1,9 +1,10 @@
 import { createServer } from "node:http";
-import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, extname, join, normalize, basename } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
+import YAML from "yaml";
 
 const HOST = process.env.CC_SWITCH_WEB_HOST || "0.0.0.0";
 const PORT = Number(process.env.CC_SWITCH_WEB_PORT || 15730);
@@ -240,6 +241,10 @@ function skillTargetDir(app) {
   }
 }
 
+function getSkillSyncMethod(state) {
+  return state.settings?.skillSyncMethod || "auto";
+}
+
 function hermesMemoriesDir() {
   return join(homedir(), ".hermes", "memories");
 }
@@ -252,6 +257,16 @@ async function readJsonFileOr(path, fallback) {
   if (!existsSync(path)) return fallback;
   try {
     return JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+async function readHermesYamlOr(path, fallback) {
+  if (!existsSync(path)) return fallback;
+  try {
+    const raw = await readFile(path, "utf8");
+    return YAML.parse(raw) || fallback;
   } catch {
     return fallback;
   }
@@ -271,6 +286,19 @@ async function syncSkillToApp(skill, app, enabled) {
   if (enabled) {
     await ensureDir(targetRoot);
     await rm(targetDir, { recursive: true, force: true });
+    const state = await loadState();
+    const method = getSkillSyncMethod(state);
+    const shouldSymlink = method === "symlink" || method === "auto";
+
+    if (shouldSymlink) {
+      try {
+        await symlink(sourceDir, targetDir, "dir");
+        return;
+      } catch {
+        if (method === "symlink") throw new Error(`Failed to symlink skill to ${app}`);
+      }
+    }
+
     await cp(sourceDir, targetDir, { recursive: true });
   } else {
     await rm(targetDir, { recursive: true, force: true });
@@ -388,7 +416,7 @@ async function applyProviderToLive(app, provider) {
   if (app === "hermes") {
     const settings = provider.settingsConfig;
     if (settings && typeof settings === "object") {
-      const existing = await readJsonFileOr(hermesConfigPath(), {});
+      const existing = await readHermesYamlOr(hermesConfigPath(), {});
       const providerName = settings.name || provider.id;
       const nextProvider = {
         ...settings,
@@ -412,10 +440,7 @@ async function applyProviderToLive(app, provider) {
       };
 
       await backupExistingFile(hermesConfigPath());
-      await writeTextAtomic(
-        hermesConfigPath(),
-        `${JSON.stringify(existing, null, 2)}\n`,
-      );
+      await writeTextAtomic(hermesConfigPath(), YAML.stringify(existing));
     }
   }
 }
@@ -568,6 +593,50 @@ async function route(req, res) {
     return sendJson(res, 200, dirs[app]);
   }
 
+  if (parts[0] === "api" && parts[1] === "live-provider-ids" && req.method === "GET") {
+    const app = parts[2];
+    assertApp(app);
+    if (app === "opencode") {
+      const config = await readJsonFileOr(opencodeConfigPath(), {});
+      return sendJson(res, 200, Object.keys(config.provider || {}));
+    }
+    if (app === "openclaw") {
+      const config = await readJsonFileOr(openclawConfigPath(), {});
+      return sendJson(res, 200, Object.keys(config.models?.providers || {}));
+    }
+    if (app === "hermes") {
+      const config = await readHermesYamlOr(hermesConfigPath(), {});
+      const providers = Array.isArray(config.custom_providers)
+        ? config.custom_providers.map((item) => item?.name).filter(Boolean)
+        : [];
+      return sendJson(res, 200, providers);
+    }
+    return sendJson(res, 200, []);
+  }
+
+  if (parts[0] === "api" && parts[1] === "live-provider-settings" && req.method === "GET") {
+    const app = parts[2];
+    assertApp(app);
+    if (app === "claude") {
+      return sendJson(res, 200, await readJsonFileOr(claudeSettingsPath(), {}));
+    }
+    if (app === "gemini") {
+      const envText = existsSync(geminiEnvPath()) ? await readFile(geminiEnvPath(), "utf8") : "";
+      const env = Object.fromEntries(
+        envText
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const idx = line.indexOf("=");
+            return idx >= 0 ? [line.slice(0, idx), line.slice(idx + 1)] : [line, ""];
+          }),
+      );
+      return sendJson(res, 200, { env });
+    }
+    return sendJson(res, 200, {});
+  }
+
   if (parts[0] === "api" && parts[1] === "endpoint-test" && req.method === "POST") {
     const { urls, timeoutSecs } = await readBody(req);
     if (!Array.isArray(urls)) throw new Error("urls must be an array");
@@ -642,6 +711,25 @@ async function route(req, res) {
     if (parts.length === 5 && parts[4] === "live-settings" && req.method === "GET") {
       const provider = state.providers[app]?.[id];
       if (!provider) throw new Error(`Provider not found: ${id}`);
+      if (app === "openclaw") {
+        const config = await readJsonFileOr(openclawConfigPath(), {});
+        return sendJson(
+          res,
+          200,
+          config.models?.providers?.[id] || provider.settingsConfig || {},
+        );
+      }
+      if (app === "opencode") {
+        const config = await readJsonFileOr(opencodeConfigPath(), {});
+        return sendJson(res, 200, config.provider?.[id] || provider.settingsConfig || {});
+      }
+      if (app === "hermes") {
+        const config = await readHermesYamlOr(hermesConfigPath(), {});
+        const match = Array.isArray(config.custom_providers)
+          ? config.custom_providers.find((item) => item?.name === id || item?.name === provider.settingsConfig?.name)
+          : null;
+        return sendJson(res, 200, match || provider.settingsConfig || {});
+      }
       return sendJson(res, 200, provider.settingsConfig || {});
     }
 
@@ -954,7 +1042,7 @@ async function route(req, res) {
 
   if (parts[0] === "api" && parts[1] === "hermes") {
     const path = hermesConfigPath();
-    const config = await readJsonFileOr(path, {});
+    const config = await readHermesYamlOr(path, {});
     const memoryLimits = {
       memory: config.memory?.budgets?.memory ?? 2200,
       user: config.memory?.budgets?.user ?? 1375,
@@ -986,7 +1074,7 @@ async function route(req, res) {
       config.memory = config.memory || {};
       config.memory.enabled = config.memory.enabled || {};
       config.memory.enabled[kind] = Boolean(enabled);
-      await writeTextAtomic(path, `${JSON.stringify(config, null, 2)}\n`);
+      await writeTextAtomic(path, YAML.stringify(config));
       return sendJson(res, 200, true);
     }
   }
