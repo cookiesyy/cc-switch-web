@@ -35,6 +35,7 @@ const defaultState = () => ({
   skills: {},
   skillRepos: [],
   prompts: Object.fromEntries(APPS.map((app) => [app, {}])),
+  skillBackups: [],
 });
 
 async function ensureDir(path) {
@@ -81,6 +82,7 @@ async function loadState() {
     skills: { ...defaultState().skills, ...(state.skills || {}) },
     prompts: { ...defaultState().prompts, ...(state.prompts || {}) },
     skillRepos: Array.isArray(state.skillRepos) ? state.skillRepos : [],
+    skillBackups: Array.isArray(state.skillBackups) ? state.skillBackups : [],
   };
 }
 
@@ -339,6 +341,37 @@ async function syncEnabledPromptToFile(state, app) {
   await writeTextAtomic(path, enabledPrompt ? String(enabledPrompt.content || "") : "");
 }
 
+async function backfillPromptFromLive(state, app) {
+  const path = promptFilePath(app);
+  if (!existsSync(path)) return;
+  const content = await readFile(path, "utf8");
+  if (!content.trim()) return;
+
+  const prompts = state.prompts?.[app] || {};
+  const enabledPrompt = Object.values(prompts).find((prompt) => prompt.enabled);
+  if (enabledPrompt) {
+    enabledPrompt.content = content;
+    enabledPrompt.updatedAt = Math.floor(Date.now() / 1000);
+    return;
+  }
+
+  const duplicated = Object.values(prompts).some(
+    (prompt) => String(prompt.content || "").trim() === content.trim(),
+  );
+  if (duplicated) return;
+
+  const id = `backup-${Date.now()}`;
+  state.prompts[app][id] = {
+    id,
+    name: `Live Prompt Backup ${new Date().toISOString()}`,
+    content,
+    description: "Auto-backed up from existing live prompt file",
+    enabled: false,
+    createdAt: Math.floor(Date.now() / 1000),
+    updatedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
 async function scanSkillsFromAppDir(app) {
   const root = skillTargetDir(app);
   if (!existsSync(root)) return [];
@@ -356,6 +389,49 @@ async function scanSkillsFromAppDir(app) {
     });
   }
   return results;
+}
+
+function omoVariantMeta(variant) {
+  if (variant === "omo-slim") {
+    return {
+      category: "omo-slim",
+      preferredFilename: "oh-my-opencode-slim.jsonc",
+      candidates: ["oh-my-opencode-slim.jsonc", "oh-my-opencode-slim.json"],
+    };
+  }
+  return {
+    category: "omo",
+    preferredFilename: "oh-my-openagent.jsonc",
+    candidates: [
+      "oh-my-openagent.jsonc",
+      "oh-my-openagent.json",
+      "oh-my-opencode.jsonc",
+      "oh-my-opencode.json",
+    ],
+  };
+}
+
+function omoConfigPathCandidates(variant) {
+  const base = join(homedir(), ".config", "opencode");
+  return omoVariantMeta(variant).candidates.map((name) => join(base, name));
+}
+
+async function readOmoLocalFile(variant) {
+  const path = omoConfigPathCandidates(variant).find((candidate) =>
+    existsSync(candidate),
+  );
+  if (!path) throw new Error(`OMO config not found for ${variant}`);
+  const raw = await readFile(path, "utf8");
+  const parsed = JSON.parse(raw.replace(/\/\/.*$/gm, ""));
+  return {
+    agents: parsed.agents || null,
+    categories: parsed.categories || null,
+    otherFields: Object.fromEntries(
+      Object.entries(parsed).filter(([key]) => !["agents", "categories"].includes(key)),
+    ),
+    filePath: path,
+    lastModified: new Date((await stat(path)).mtimeMs).toISOString(),
+  };
 }
 
 async function extractZipToDir(buffer, destinationDir) {
@@ -868,7 +944,7 @@ async function route(req, res) {
       return sendJson(res, 200, Object.values(state.skills || {}));
     }
     if (parts[2] === "backups" && req.method === "GET") {
-      return sendJson(res, 200, []);
+      return sendJson(res, 200, state.skillBackups || []);
     }
     if (parts[2] === "install" && req.method === "POST") {
       const { skill, currentApp } = await readBody(req);
@@ -938,6 +1014,12 @@ async function route(req, res) {
       const { id } = await readBody(req);
       const skill = state.skills?.[id];
       if (skill) {
+        state.skillBackups.unshift({
+          backupId: `backup-${Date.now()}`,
+          backupPath: skill.directory,
+          createdAt: Math.floor(Date.now() / 1000),
+          skill,
+        });
         for (const app of APPS) {
           await syncSkillToApp(skill, app, false);
         }
@@ -945,6 +1027,31 @@ async function route(req, res) {
       delete state.skills[id];
       await saveState(state);
       return sendJson(res, 200, {});
+    }
+    if (parts[2] === "restore-backup" && req.method === "POST") {
+      const { backupId, currentApp } = await readBody(req);
+      const backup = (state.skillBackups || []).find((item) => item.backupId === backupId);
+      if (!backup) throw new Error(`Skill backup not found: ${backupId}`);
+      const restored = {
+        ...backup.skill,
+        apps: {
+          ...backup.skill.apps,
+          [currentApp]: true,
+        },
+        updatedAt: Date.now(),
+      };
+      state.skills[restored.id] = restored;
+      await syncSkillEverywhere(restored);
+      await saveState(state);
+      return sendJson(res, 200, restored);
+    }
+    if (parts[2] === "delete-backup" && req.method === "POST") {
+      const { backupId } = await readBody(req);
+      state.skillBackups = (state.skillBackups || []).filter(
+        (item) => item.backupId !== backupId,
+      );
+      await saveState(state);
+      return sendJson(res, 200, true);
     }
     if (parts[2] === "restore-backup" && req.method === "POST") {
       throw new Error("Skill backup restore is not implemented in web mode");
@@ -994,10 +1101,29 @@ async function route(req, res) {
       return sendJson(res, 200, installed);
     }
     if (parts[2] === "discover" && req.method === "GET") {
-      return sendJson(res, 200, []);
+      const repos = state.skillRepos || [];
+      const items = repos.map((repo) => ({
+        key: `${repo.owner}/${repo.name}:${repo.branch || "main"}`,
+        name: repo.name,
+        description: `Repository ${repo.owner}/${repo.name}`,
+        directory: repo.name,
+        readmeUrl: `https://github.com/${repo.owner}/${repo.name}/blob/${repo.branch || "main"}/README.md`,
+        repoOwner: repo.owner,
+        repoName: repo.name,
+        repoBranch: repo.branch || "main",
+      }));
+      return sendJson(res, 200, items);
     }
     if (parts[2] === "check-updates" && req.method === "GET") {
-      return sendJson(res, 200, []);
+      const updates = Object.values(state.skills || [])
+        .filter((skill) => skill.repoOwner && skill.repoName)
+        .map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          currentHash: skill.contentHash || "",
+          remoteHash: `remote-${skill.id}`,
+        }));
+      return sendJson(res, 200, updates);
     }
     if (parts[2] === "update" && req.method === "POST") {
       const { id } = await readBody(req);
@@ -1083,6 +1209,7 @@ async function route(req, res) {
     }
 
     if (parts.length === 5 && parts[4] === "enable" && req.method === "POST") {
+      await backfillPromptFromLive(state, app);
       Object.keys(state.prompts[app] || {}).forEach((key) => {
         state.prompts[app][key].enabled = key === id;
       });
@@ -1182,6 +1309,31 @@ async function route(req, res) {
       config.memory.enabled = config.memory.enabled || {};
       config.memory.enabled[kind] = Boolean(enabled);
       await writeTextAtomic(path, YAML.stringify(config));
+      return sendJson(res, 200, true);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "omo") {
+    const variant = parts[2] === "slim" ? "omo-slim" : "omo";
+    if (parts[3] === "local-file" && req.method === "GET") {
+      return sendJson(res, 200, await readOmoLocalFile(variant));
+    }
+    if (parts[3] === "current-provider-id" && req.method === "GET") {
+      const current = Object.values(state.providers.opencode || {}).find(
+        (provider) => provider.category === variant && state.current.opencode === provider.id,
+      );
+      return sendJson(res, 200, current?.id || "");
+    }
+    if (parts[3] === "disable-current" && req.method === "POST") {
+      for (const [id, provider] of Object.entries(state.providers.opencode || {})) {
+        if (provider.category === variant && state.current.opencode === id) {
+          state.current.opencode = "";
+        }
+      }
+      for (const path of omoConfigPathCandidates(variant)) {
+        await rm(path, { force: true });
+      }
+      await saveState(state);
       return sendJson(res, 200, true);
     }
   }

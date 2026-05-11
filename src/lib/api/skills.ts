@@ -156,7 +156,10 @@ export const skillsApi = {
   /** 删除 Skill 备份 */
   async deleteBackup(backupId: string): Promise<boolean> {
     if (!isTauriRuntime()) {
-      return false;
+      return await apiRequest("/api/skills/delete-backup", {
+        method: "POST",
+        body: JSON.stringify({ backupId }),
+      });
     }
     return await invoke("delete_skill_backup", { backupId });
   },
@@ -192,7 +195,10 @@ export const skillsApi = {
     currentApp: AppId,
   ): Promise<InstalledSkill> {
     if (!isTauriRuntime()) {
-      throw new Error("Skill backup restore is not implemented in web mode");
+      return await apiRequest("/api/skills/restore-backup", {
+        method: "POST",
+        body: JSON.stringify({ backupId, currentApp }),
+      });
     }
     return await invoke("restore_skill_backup", { backupId, currentApp });
   },
