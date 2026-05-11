@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { isTauriRuntime } from "./http";
+import { apiRequest, isTauriRuntime } from "./http";
 
 export type ManagedAuthProvider = "github_copilot" | "codex_oauth";
 
@@ -57,7 +57,9 @@ export async function authPollForAccount(
 export async function authListAccounts(
   authProvider: ManagedAuthProvider,
 ): Promise<ManagedAuthAccount[]> {
-  if (!isTauriRuntime()) return [];
+  if (!isTauriRuntime()) {
+    return apiRequest(`/api/auth/${authProvider}/accounts`);
+  }
   return invoke<ManagedAuthAccount[]>("auth_list_accounts", {
     authProvider,
   });
@@ -67,12 +69,7 @@ export async function authGetStatus(
   authProvider: ManagedAuthProvider,
 ): Promise<ManagedAuthStatus> {
   if (!isTauriRuntime()) {
-    return {
-      provider: authProvider,
-      authenticated: false,
-      default_account_id: null,
-      accounts: [],
-    };
+    return apiRequest(`/api/auth/${authProvider}/status`);
   }
   return invoke<ManagedAuthStatus>("auth_get_status", {
     authProvider,
@@ -83,7 +80,12 @@ export async function authRemoveAccount(
   authProvider: ManagedAuthProvider,
   accountId: string,
 ): Promise<void> {
-  if (!isTauriRuntime()) return;
+  if (!isTauriRuntime()) {
+    await apiRequest(`/api/auth/${authProvider}/accounts/${encodeURIComponent(accountId)}`, {
+      method: "DELETE",
+    });
+    return;
+  }
   return invoke("auth_remove_account", {
     authProvider,
     accountId,
@@ -94,7 +96,13 @@ export async function authSetDefaultAccount(
   authProvider: ManagedAuthProvider,
   accountId: string,
 ): Promise<void> {
-  if (!isTauriRuntime()) return;
+  if (!isTauriRuntime()) {
+    await apiRequest(`/api/auth/${authProvider}/default-account`, {
+      method: "PUT",
+      body: JSON.stringify({ accountId }),
+    });
+    return;
+  }
   return invoke("auth_set_default_account", {
     authProvider,
     accountId,
@@ -104,7 +112,10 @@ export async function authSetDefaultAccount(
 export async function authLogout(
   authProvider: ManagedAuthProvider,
 ): Promise<void> {
-  if (!isTauriRuntime()) return;
+  if (!isTauriRuntime()) {
+    await apiRequest(`/api/auth/${authProvider}/logout`, { method: "POST" });
+    return;
+  }
   return invoke("auth_logout", {
     authProvider,
   });

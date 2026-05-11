@@ -6,7 +6,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { isTauriRuntime } from "./http";
+import { apiRequest, isTauriRuntime } from "./http";
 
 /**
  * GitHub 设备码响应
@@ -85,14 +85,7 @@ export async function copilotPollForAuth(deviceCode: string): Promise<boolean> {
  */
 export async function copilotGetAuthStatus(): Promise<CopilotAuthStatus> {
   if (!isTauriRuntime()) {
-    return {
-      authenticated: false,
-      default_account_id: null,
-      migration_error: null,
-      username: null,
-      expires_at: null,
-      accounts: [],
-    };
+    return apiRequest("/api/copilot/status");
   }
   return invoke<CopilotAuthStatus>("copilot_get_auth_status");
 }
@@ -101,7 +94,10 @@ export async function copilotGetAuthStatus(): Promise<CopilotAuthStatus> {
  * 注销 Copilot 认证
  */
 export async function copilotLogout(): Promise<void> {
-  if (!isTauriRuntime()) return;
+  if (!isTauriRuntime()) {
+    await apiRequest("/api/copilot/logout", { method: "POST" });
+    return;
+  }
   return invoke("copilot_logout");
 }
 
@@ -143,7 +139,7 @@ export async function copilotGetToken(): Promise<string> {
  * @returns 可用模型列表
  */
 export async function copilotGetModels(): Promise<CopilotModel[]> {
-  if (!isTauriRuntime()) return [];
+  if (!isTauriRuntime()) return apiRequest("/api/copilot/models");
   return invoke<CopilotModel[]>("copilot_get_models");
 }
 
@@ -181,7 +177,7 @@ export interface CopilotUsageResponse {
  * @returns 使用量信息，包含计划类型、重置日期和配额快照
  */
 export async function copilotGetUsage(): Promise<CopilotUsageResponse> {
-  if (!isTauriRuntime()) throw new Error("Copilot usage is not available in web mode");
+  if (!isTauriRuntime()) return apiRequest("/api/copilot/usage");
   return invoke<CopilotUsageResponse>("copilot_get_usage");
 }
 
@@ -193,7 +189,7 @@ export async function copilotGetUsage(): Promise<CopilotUsageResponse> {
  * @returns 账号列表
  */
 export async function copilotListAccounts(): Promise<GitHubAccount[]> {
-  if (!isTauriRuntime()) return [];
+  if (!isTauriRuntime()) return apiRequest("/api/copilot/accounts");
   return invoke<GitHubAccount[]>("copilot_list_accounts");
 }
 
@@ -221,7 +217,12 @@ export async function copilotPollForAccount(
  * @param accountId - GitHub 用户 ID
  */
 export async function copilotRemoveAccount(accountId: string): Promise<void> {
-  if (!isTauriRuntime()) return;
+  if (!isTauriRuntime()) {
+    await apiRequest(`/api/copilot/accounts/${encodeURIComponent(accountId)}`, {
+      method: "DELETE",
+    });
+    return;
+  }
   return invoke("copilot_remove_account", { accountId });
 }
 
@@ -233,7 +234,13 @@ export async function copilotRemoveAccount(accountId: string): Promise<void> {
 export async function copilotSetDefaultAccount(
   accountId: string,
 ): Promise<void> {
-  if (!isTauriRuntime()) return;
+  if (!isTauriRuntime()) {
+    await apiRequest("/api/copilot/default-account", {
+      method: "PUT",
+      body: JSON.stringify({ accountId }),
+    });
+    return;
+  }
   return invoke("copilot_set_default_account", { accountId });
 }
 

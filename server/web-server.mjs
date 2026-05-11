@@ -466,6 +466,16 @@ function getAuthStatus(provider) {
   };
 }
 
+function upsertAuthAccount(provider, account) {
+  getDb()
+    .prepare(`
+      INSERT INTO auth_accounts_store(provider, account_id, value)
+      VALUES(?, ?, ?)
+      ON CONFLICT(provider, account_id) DO UPDATE SET value = excluded.value
+    `)
+    .run(provider, account.id, JSON.stringify(account));
+}
+
 async function migrateStateJsonToDbIfNeeded() {
   const database = getDb();
   const providerCount = Number(
@@ -1946,6 +1956,11 @@ async function route(req, res) {
 
   if (parts[0] === "api" && parts[1] === "auth") {
     const provider = parts[2];
+    if (parts[3] === "accounts" && req.method === "POST") {
+      const account = await readBody(req);
+      upsertAuthAccount(provider, account);
+      return sendJson(res, 200, true);
+    }
     if (parts[3] === "status" && req.method === "GET") {
       return sendJson(res, 200, getAuthStatus(provider));
     }
@@ -1974,6 +1989,70 @@ async function route(req, res) {
         `)
         .run(provider, accountId);
       return sendJson(res, 200, true);
+    }
+  }
+
+  if (parts[0] === "api" && parts[1] === "copilot") {
+    if (parts[2] === "status" && req.method === "GET") {
+      const status = getAuthStatus("github_copilot");
+      return sendJson(res, 200, {
+        authenticated: status.authenticated,
+        default_account_id: status.default_account_id,
+        migration_error: null,
+        username: status.accounts[0]?.login || null,
+        expires_at: null,
+        accounts: status.accounts,
+      });
+    }
+    if (parts[2] === "accounts" && req.method === "GET") {
+      return sendJson(res, 200, getAuthStatus("github_copilot").accounts);
+    }
+    if (parts[2] === "accounts" && req.method === "POST") {
+      const account = await readBody(req);
+      upsertAuthAccount("github_copilot", account);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "accounts" && parts[3] && req.method === "DELETE") {
+      const accountId = decodeURIComponent(parts[3]);
+      getDb()
+        .prepare("DELETE FROM auth_accounts_store WHERE provider = ? AND account_id = ?")
+        .run("github_copilot", accountId);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "default-account" && req.method === "PUT") {
+      const { accountId } = await readBody(req);
+      getDb()
+        .prepare(`
+          INSERT INTO auth_default_store(provider, account_id)
+          VALUES(?, ?)
+          ON CONFLICT(provider) DO UPDATE SET account_id = excluded.account_id
+        `)
+        .run("github_copilot", accountId);
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "logout" && req.method === "POST") {
+      getDb().prepare("DELETE FROM auth_accounts_store WHERE provider = ?").run("github_copilot");
+      getDb().prepare("DELETE FROM auth_default_store WHERE provider = ?").run("github_copilot");
+      return sendJson(res, 200, true);
+    }
+    if (parts[2] === "models" && req.method === "GET") {
+      return sendJson(res, 200, []);
+    }
+    if (parts[2] === "usage" && req.method === "GET") {
+      return sendJson(res, 200, {
+        copilot_plan: "unknown",
+        quota_reset_date: "",
+        quota_snapshots: {
+          chat: { entitlement: 0, remaining: 0, percent_remaining: 0, unlimited: false },
+          completions: { entitlement: 0, remaining: 0, percent_remaining: 0, unlimited: false },
+          premium_interactions: {
+            entitlement: 0,
+            remaining: 0,
+            percent_remaining: 0,
+            unlimited: false,
+          },
+        },
+      });
     }
   }
 
